@@ -40,7 +40,7 @@ pub const Node = union(enum) {
 };
 
 pub const Document = struct {
-    nodeType: NodeType = .element_node,
+    nodeType: NodeType = .document_node,
     tagName: []const u8,
     children: std.ArrayList(Node),
     parentElement: ?*Element = null,
