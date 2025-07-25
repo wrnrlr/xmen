@@ -22,9 +22,8 @@ pub export fn node_create(tag_name: [*c]const u8) ?*Element {
 pub export fn node_free(node: ?*anyopaque) i32 {
     if (node) |n| {
         const elem:*Element = @ptrCast(@alignCast(n));
-        const allocator = std.heap.page_allocator;
         elem.deinit();
-        allocator.destroy(elem);
+        global_allocator.destroy(elem);
         return 0;
     } else {
         return 1;  // Error code, e.g., null node
@@ -32,15 +31,15 @@ pub export fn node_free(node: ?*anyopaque) i32 {
 }
 
 pub export fn node_type(node: ?*anyopaque) i32 {
-  const n:*Node = @ptrCast(@alignCast(node));
-  return @intFromEnum(n.getNodeType());
+  const elem:*Element = @ptrCast(@alignCast(node));
+  std.debug.print("Debug: Actual nodeType value is {d}\n", .{@intFromEnum(elem.nodeType)});
+  return @intFromEnum(elem.nodeType);
 }
 
 // return a copy of the string not a reference
 pub export fn node_name(node: *anyopaque) [*c]u8 {
     const elem:*Element = @ptrCast(@alignCast(node));
-    const allocator = std.heap.page_allocator;
-    const c_str = allocator.dupeZ(u8, elem.tagName) catch return null;
+    const c_str = global_allocator.dupeZ(u8, elem.tagName) catch return null;
     return @as([*c]u8, c_str.ptr);  // Returns a C string that needs to be freed by the caller
 }
 
@@ -51,8 +50,21 @@ test "ffi_node" {
     const tag_name = "test_node";
     const elem_ptr = node_create(tag_name.ptr);
     try testing.expect(elem_ptr != null);
-    // Cast to anyopaque for node_free
-    std.debug.print("Debug: Before node_free, tagName address is {*}\n", .{elem_ptr.?.tagName.ptr});
-    const result = node_free(@ptrCast(elem_ptr));
-    try testing.expectEqual(@as(i32, 0), result);
+
+    // Test node_type
+    const type_value = node_type(elem_ptr);
+    try testing.expectEqual(@as(i32, 1), type_value);  // Expecting element_node which is 1
+
+    // Test node_name
+    const name_ptr = node_name(elem_ptr.?);
+    if (name_ptr != null) {
+        const name = std.mem.span(name_ptr);
+        try testing.expect(std.mem.eql(u8, name, tag_name));
+        // Free the allocated string
+        const allocator = std.heap.page_allocator;
+        allocator.free(name);
+    }
+
+    const free_result = node_free(elem_ptr);
+    try testing.expectEqual(@as(i32, 0), free_result);
 }
