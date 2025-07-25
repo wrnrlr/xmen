@@ -18,16 +18,11 @@ pub export fn node_create(tag_name: [*c]const u8) ?*Element {
     return elem;
 }
 
-//
 pub export fn node_free(node: ?*anyopaque) i32 {
-    if (node) |n| {
-        const elem:*Element = @ptrCast(@alignCast(n));
-        elem.deinit();
-        global_allocator.destroy(elem);
-        return 0;
-    } else {
-        return 1;  // Error code, e.g., null node
-    }
+  const elem:*Element = @ptrCast(@alignCast(node));
+  elem.deinit();
+  global_allocator.destroy(elem);
+  return 0;
 }
 
 pub export fn node_type(node: ?*anyopaque) i32 {
