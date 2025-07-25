@@ -100,7 +100,6 @@ pub const SaxParser = struct {
                                 .name = .{ .ptr = text.ptr, .len = text.len },
                                 .attributes = .{ .ptr = null, .len = 0 },
                             };
-                            std.debug.print("Emitting Text event: type={} data={s}\n", .{ @intFromEnum(event.type), text });
                             if (self.on_event != null) {
                                 self.on_event.?(self.context, event);
                             }
@@ -158,7 +157,6 @@ pub const SaxParser = struct {
                             .name = .{ .ptr = trimmed_comment.ptr, .len = trimmed_comment.len },
                             .attributes = .{ .ptr = null, .len = 0 },
                         };
-                        std.debug.print("Emitting Comment event: type={} data={s}\n", .{ @intFromEnum(event.type), trimmed_comment });
                         if (self.on_event != null) {
                             self.on_event.?(self.context, event);
                         }
@@ -177,7 +175,6 @@ pub const SaxParser = struct {
                             .name = .{ .ptr = pi.ptr, .len = pi.len },
                             .attributes = .{ .ptr = null, .len = 0 },
                         };
-                        std.debug.print("Emitting ProcessingInstruction event: type={} data={s}\n", .{ @intFromEnum(event.type), pi });
                         if (self.on_event != null) {
                             self.on_event.?(self.context, event);
                         }
@@ -201,7 +198,6 @@ pub const SaxParser = struct {
                                 .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
                                 .attributes = .{ .ptr = null, .len = 0 },
                             };
-                            std.debug.print("Emitting Close event: type={} data={s}\n", .{ @intFromEnum(event.type), self.tag_name });
                             if (self.on_event != null) {
                                 self.on_event.?(self.context, event);
                             }
@@ -211,7 +207,6 @@ pub const SaxParser = struct {
                                 .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
                                 .attributes = .{ .ptr = self.attributes.items.ptr, .len = self.attributes.items.len },
                             };
-                            std.debug.print("Emitting Open event: type={} data={s}\n", .{ @intFromEnum(event.type), self.tag_name });
                             if (self.on_event != null) {
                                 self.on_event.?(self.context, event);
                             }
@@ -221,7 +216,6 @@ pub const SaxParser = struct {
                                     .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
                                     .attributes = .{ .ptr = null, .len = 0 },
                                 };
-                                std.debug.print("Emitting Close event (self-closing): type={} data={s}\n", .{ @intFromEnum(close_event.type), self.tag_name });
                                 if (self.on_event != null) {
                                     self.on_event.?(self.context, close_event);
                                 }
@@ -243,7 +237,6 @@ pub const SaxParser = struct {
                                 .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
                                 .attributes = .{ .ptr = null, .len = 0 },
                             };
-                            std.debug.print("Emitting Close event: type={} data={s}\n", .{ @intFromEnum(event.type), self.tag_name });
                             if (self.on_event != null) {
                                 self.on_event.?(self.context, event);
                             }
@@ -253,7 +246,6 @@ pub const SaxParser = struct {
                                 .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
                                 .attributes = .{ .ptr = self.attributes.items.ptr, .len = self.attributes.items.len },
                             };
-                            std.debug.print("Emitting Open event: type={} data={s}\n", .{ @intFromEnum(event.type), self.tag_name });
                             if (self.on_event != null) {
                                 self.on_event.?(self.context, event);
                             }
@@ -263,7 +255,6 @@ pub const SaxParser = struct {
                                     .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
                                     .attributes = .{ .ptr = null, .len = 0 },
                                 };
-                                std.debug.print("Emitting Close event (self-closing): type={} data={s}\n", .{ @intFromEnum(close_event.type), self.tag_name });
                                 if (self.on_event != null) {
                                     self.on_event.?(self.context, close_event);
                                 }
@@ -314,7 +305,6 @@ pub const SaxParser = struct {
                             .name = .{ .ptr = cdata.ptr, .len = cdata.len },
                             .attributes = .{ .ptr = null, .len = 0 },
                         };
-                        std.debug.print("Emitting Cdata event: type={} data={s}\n", .{ @intFromEnum(event.type), cdata });
                         if (self.on_event != null) {
                             self.on_event.?(self.context, event);
                         }
