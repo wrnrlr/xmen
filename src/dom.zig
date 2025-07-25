@@ -116,6 +116,11 @@ pub const Element = struct {
         }
         try writer.print("</{s}>", .{self.tagName});
     }
+
+    pub fn deinit(self: *Element) void {
+        self.attributes.deinit();
+        self.children.deinit();
+    }
 };
 
 pub const Text = struct {
