@@ -205,7 +205,7 @@ pub const Attr = struct {
 
 const testing = std.testing;
 
-test "Node.getNodeType returns correct node type" {
+test "Node.getNodeType" {
     var doc = Document.init(testing.allocator);
     var elem = Element.init(testing.allocator, "div");
     var text = Text{ .content = "Hello" };
@@ -222,7 +222,7 @@ test "Node.getNodeType returns correct node type" {
     try testing.expectEqual(NodeType.attribute, attr_node.getNodeType());
 }
 
-test "Node.parentElement returns parent" {
+test "Node.parentElement" {
     var doc = Document.init(testing.allocator);
     var elem = Element.init(testing.allocator, "div");
     var text = Text{ .content = "Hello" };
@@ -250,7 +250,7 @@ test "Node.parentElement returns parent" {
     try testing.expectEqual(&elem_node, attr_node.getParentElement());
 }
 
-test "Element.init creates element with correct properties" {
+test "Element.init" {
     const elem = Element.init(testing.allocator, "div");
     try testing.expectEqualStrings("div", elem.tagName);
     try testing.expectEqual(NodeType.element, elem.nodeType);
@@ -259,7 +259,7 @@ test "Element.init creates element with correct properties" {
     try testing.expectEqual(@as(?*Node, null), elem.parentElement);
 }
 
-test "Element.setAttribute and getAttribute work correctly" {
+test "Element.{set|get}Attribute" {
     var elem = Element.init(testing.allocator, "div");
     // This line should now work with the updated signature; no change needed, but confirming for context
     var elemNode = Node{ .element = &elem };
