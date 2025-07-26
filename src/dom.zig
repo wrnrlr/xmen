@@ -28,6 +28,24 @@ pub const Node = union(NodeType) {
       }
     }
 
+    pub fn setParentElement(self: Node, parent:*Node) void {
+        switch (self) {
+            .document => null,
+            .element => |elem| elem.parentElement = parent,
+            .text => |text| text.parentElement = parent,
+            .attribute => |attr| attr.parentElement = parent
+        }
+    }
+
+    pub fn getParentElement(self: Node) ?*Node {
+        return switch (self) {
+            .document => null,
+            .element => self.element.parentElement,
+            .text => self.text.parentElement,
+            .attribute => self.attribute.parentElement,
+        };
+    }
+
     pub fn getNodeType(self: Node) NodeType {
         return switch (self) {
             .document => self.document.nodeType,
@@ -61,6 +79,17 @@ pub const Document = struct {
         self.children.deinit();
     }
 
+    pub fn appendChild(self: *Document, node: *Node, child: *Node) !*Node {
+        switch (child.*) {
+            .document => {},
+            .element => |e| e.parentElement = node,
+            .attribute => |a| a.parentElement = node,
+            .text => {}
+        }
+        try self.children.append(child.*);
+        return child;
+    }
+
     pub fn render(self: Document, writer: anytype) RenderError!void {
         for (self.children.items) |child| {
             try child.render(writer);
@@ -71,14 +100,14 @@ pub const Document = struct {
 pub const Element = struct {
     nodeType: NodeType = .element,
     tagName: []const u8,
-    attributes: std.ArrayList(Attr) = undefined,
+    attributes: std.ArrayList(Node) = undefined,
     children: std.ArrayList(Node) = undefined,
-    parentElement: ?*Element = null,
+    parentElement: ?*Node = null,
 
     pub fn init(allocator: Allocator, tagName: []const u8) Element {
         return Element{
             .tagName = tagName,
-            .attributes = std.ArrayList(Attr).init(allocator),
+            .attributes = std.ArrayList(Node).init(allocator),
             .children = std.ArrayList(Node).init(allocator),
             .parentElement = null,
         };
@@ -89,41 +118,55 @@ pub const Element = struct {
         self.children.deinit();
     }
 
-    pub fn appendChild(self: *Element, child: *Node) !*Node {
+    pub fn appendChild(self: *Element, node: *Node, child: *Node) !*Node {
         switch (child.*) {
             .document => {},
-            .element => |e| e.parentElement = self,
-            .text => |t| t.parentElement = self,
-            .attribute => |a| a.parentElement = self,
+            .element => |e| e.parentElement = node,
+            .attribute => |a| a.parentElement = node,
+            .text => {}
         }
 
         try self.children.append(child.*);
         return child;
     }
 
-    pub fn setAttribute(self: *Element, name: []const u8, value: []const u8) !void {
-        // Check if attribute already exists
+    pub fn getAttribute(self: *Element, name: []const u8) ?[]const u8 {
+        for (self.attributes.items) |node| {
+          switch (node) {
+            .attribute => |attr| {
+              if (std.mem.eql(u8, attr.name, name)) return attr.value;
+            },
+            else => {}
+          }
+        }
+        return null;
+    }
+
+    pub fn setAttribute(self: *Element, node: *Node, name: []const u8, value: []const u8) !void {
         for (self.attributes.items) |*attr| {
-            if (std.mem.eql(u8, attr.name, name)) {
-                attr.value = value;
+            if (std.mem.eql(u8, attr.attribute.name, name)) {
+                attr.attribute.value = value;
                 return;
             }
         }
-        // Add new attribute
-        try self.attributes.append(Attr{
+
+        var newAttr = Attr{
             .name = name,
             .value = value,
-            .parentElement = self,
-        });
+            .parentElement = node,
+        };
+        try self.attributes.append(Node{ .attribute = &newAttr });
     }
 
-    pub fn getAttribute(self: *Element, name: []const u8) ?[]const u8 {
-        for (self.attributes.items) |attr| {
-            if (std.mem.eql(u8, attr.name, name)) {
-                return attr.value;
+    pub fn deleteAttribute(self: *Element, name: []const u8, value: []const u8) !void {
+        for (self.attributes.items, 0..) |item, index| {
+            if (item == .attribute) {
+                if (std.mem.eql(u8, item.attribute.name, name) and std.mem.eql(u8, item.attribute.value, value)) {
+                    _ = self.attributes.swapRemove(index);
+                    return;
+                }
             }
         }
-        return null;
     }
 
     pub fn render(self: Element, writer: anytype) RenderError!void {
@@ -142,7 +185,7 @@ pub const Element = struct {
 pub const Text = struct {
     nodeType: NodeType = .text,
     content: []const u8,
-    parentElement: ?*Element = null,
+    parentElement: ?*Node = null,
 
     fn render(self: Text, writer: anytype) RenderError!void {
         try writer.print("{s}", .{self.content});
@@ -153,7 +196,7 @@ pub const Attr = struct {
     nodeType: NodeType = .attribute,
     name: []const u8,
     value: []const u8,
-    parentElement: ?*Element = null,
+    parentElement: ?*Node = null,
 
     fn render(self: Attr, writer: anytype) RenderError!void {
         try writer.print(" {s}=\"{s}\"", .{ self.name, self.value });
@@ -179,24 +222,54 @@ test "Node.getNodeType returns correct node type" {
     try testing.expectEqual(NodeType.attribute, attr_node.getNodeType());
 }
 
+test "Node.parentElement returns parent" {
+    var doc = Document.init(testing.allocator);
+    var elem = Element.init(testing.allocator, "div");
+    var text = Text{ .content = "Hello" };
+    var attr = Attr{ .name = "id", .value = "test" };
+
+    var doc_node = Node{ .document = &doc };
+    try testing.expectEqual(null, doc_node.getParentElement());
+
+    var elem_node = Node{ .element = &elem };
+    try testing.expectEqual(null, elem_node.getParentElement());
+
+    elem_node.element.parentElement = &doc_node;
+    try testing.expectEqual(&doc_node, elem_node.getParentElement());
+
+    var text_node = Node{ .text = &text };
+    try testing.expectEqual(null, text_node.getParentElement());
+
+    text_node.element.parentElement = &elem_node;
+    try testing.expectEqual(&elem_node, text_node.getParentElement());
+
+    var attr_node = Node{ .attribute = &attr };
+    try testing.expectEqual(null, attr_node.getParentElement());
+
+    attr_node.element.parentElement = &elem_node;
+    try testing.expectEqual(&elem_node, attr_node.getParentElement());
+}
+
 test "Element.init creates element with correct properties" {
     const elem = Element.init(testing.allocator, "div");
     try testing.expectEqualStrings("div", elem.tagName);
     try testing.expectEqual(NodeType.element, elem.nodeType);
     try testing.expectEqual(@as(usize, 0), elem.attributes.items.len);
     try testing.expectEqual(@as(usize, 0), elem.children.items.len);
-    try testing.expectEqual(@as(?*Element, null), elem.parentElement);
+    try testing.expectEqual(@as(?*Node, null), elem.parentElement);
 }
 
 test "Element.setAttribute and getAttribute work correctly" {
     var elem = Element.init(testing.allocator, "div");
-    try elem.setAttribute("id", "test");
-    try elem.setAttribute("class", "container");
+    // This line should now work with the updated signature; no change needed, but confirming for context
+    var elemNode = Node{ .element = &elem };
+    try elem.setAttribute(&elemNode, "id", "test");
+    try elem.setAttribute(&elemNode, "class", "container");
 
     try testing.expectEqualStrings("test", elem.getAttribute("id").?);
     try testing.expectEqualStrings("container", elem.getAttribute("class").?);
     try testing.expectEqual(@as(?[]const u8, null), elem.getAttribute("style"));
-    try elem.setAttribute("id", "new-id");
+    try elem.setAttribute(&elemNode, "id", "new-id");
     try testing.expectEqualStrings("new-id", elem.getAttribute("id").?);
     try testing.expectEqual(@as(usize, 2), elem.attributes.items.len);
     elem.deinit();
@@ -207,16 +280,17 @@ test "Element.appendChild sets parent and adds child" {
     var child_elem = Element.init(testing.allocator, "span");
     var text = Text{ .content = "Hello" };
 
+    var parent_node = Node{ .element = &parent };
     var child_node = Node{ .element = &child_elem };
     var text_node = Node{ .text = &text };
 
-    _ = try parent.appendChild(&child_node);
+    _ = try parent.appendChild(&parent_node, &child_node);
     try testing.expectEqual(@as(usize, 1), parent.children.items.len);
-    try testing.expectEqual(&parent, child_elem.parentElement);
+    try testing.expectEqual(&parent_node, child_elem.parentElement);
 
-    _ = try parent.appendChild(&text_node);
+    _ = try parent.appendChild(&text_node, &child_node);
     try testing.expectEqual(@as(usize, 2), parent.children.items.len);
-    try testing.expectEqual(&parent, text.parentElement);
+    try testing.expectEqual(&parent_node, text.parentElement);
     parent.deinit();
     child_elem.deinit();
 }
@@ -227,10 +301,11 @@ test "Render simple element with attributes and text" {
     const allocator = arena.allocator();
 
     var elem = Element.init(allocator, "div");
-    try elem.setAttribute("id", "test");
+    var elemNode = Node{ .element = &elem };
+    try elem.setAttribute(&elemNode, "id", "test");
     var text = Text{ .content = "Hello, World!" };
     var text_node = Node{ .text = &text };
-    _ = try elem.appendChild(&text_node);
+    _ = try elem.appendChild(&elemNode, &text_node);
 
     var buffer = std.ArrayList(u8).init(allocator);
     defer buffer.deinit();
@@ -246,15 +321,16 @@ test "Render nested elements" {
     const allocator = arena.allocator();
 
     var parent = Element.init(allocator, "div");
-    try parent.setAttribute("class", "container");
+    var parentNode = Node{ .element = &parent };
+    try parent.setAttribute(&parentNode, "class", "container");
 
     var child = Element.init(allocator, "span");
     var text = Text{ .content = "Nested" };
     var text_node = Node{ .text = &text };
     var child_node = Node{ .element = &child };
 
-    _ = try child.appendChild(&text_node);
-    _ = try parent.appendChild(&child_node);
+    _ = try child.appendChild(&child_node, &text_node);
+    _ = try parent.appendChild(&parentNode, &child_node);
 
     var buffer = std.ArrayList(u8).init(allocator);
     defer buffer.deinit();
@@ -270,13 +346,14 @@ test "Document renders children" {
     const allocator = arena.allocator();
 
     var doc = Document.init(allocator);
+    var doc_node = Node{ .document = &doc };
     var elem = Element.init(allocator, "p");
     var text = Text{ .content = "Document content" };
     var text_node = Node{ .text = &text };
-    const elem_node = Node{ .element = &elem };
+    var elem_node = Node{ .element = &elem };
 
-    _ = try elem.appendChild(&text_node);
-    try doc.children.append(elem_node);
+    _ = try elem.appendChild(&elem_node, &text_node);
+    _ = try doc.appendChild(&doc_node, &elem_node);
 
     var buffer = std.ArrayList(u8).init(allocator);
     defer buffer.deinit();
@@ -284,4 +361,22 @@ test "Document renders children" {
 
     const expected = "<p>Document content</p>";
     try testing.expectEqualStrings(expected, buffer.items);
+}
+
+test "Element.deleteAttribute removes attribute correctly" {
+    var elem = Element.init(testing.allocator, "div");
+    var elemNode = Node{ .element = &elem };
+    try elem.setAttribute(&elemNode, "id", "old-id");
+    try elem.setAttribute(&elemNode, "class", "container");
+    try elem.setAttribute(&elemNode, "id", "another-id");  // Add another to ensure we don't remove the wrong one
+
+    try testing.expectEqual(@as(usize, 3), elem.attributes.items.len);  // Initial count
+
+    try elem.deleteAttribute("id", "old-id");  // Delete specific one
+
+    try testing.expectEqual(@as(usize, 2), elem.attributes.items.len);  // Should have removed one
+    try testing.expect( elem.getAttribute("id") != null );  // The other "id" should still be there
+    try testing.expectEqualStrings("container", elem.getAttribute("class").?);
+
+    elem.deinit();
 }
