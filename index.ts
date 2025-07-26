@@ -1,12 +1,13 @@
-import { dlopen, FFIType, suffix, CString } from 'bun:ffi';
-const { i32, ptr, function: callback, cstring } = FFIType;
+import { dlopen, FFIType, suffix, CString, Pointer } from 'bun:ffi';
+const { i32, u8, ptr, function: callback, cstring, uint64_t:usize } = FFIType;
 
 const path = `./zig-out/lib/libxmen.${suffix}`;
 const { symbols } = dlopen(path, {
-  node_create: { args: [cstring], returns: ptr },
+  doc_init: { args: [cstring, usize], returns: ptr },
+  elem_init: { args: [cstring, usize], returns: ptr },
   node_free: { args: [ptr], returns: i32 },
-  node_type: { args: [ptr], returns: i32 },
-  node_name: { args: [ptr], returns: cstring },
+  node_type: { args: [ptr], returns: u8 },
+  tag_name: { args: [ptr], returns: cstring },
 });
 
 export enum NodeType {
@@ -22,34 +23,52 @@ export enum NodeType {
 }
 
 export abstract class Node {
-  abstract get nodeType(): NodeType;
-  abstract get nodeName(): string;
-}
+  protected readonly ptr: Pointer
 
-export class Element extends Node {
-  private ptr: unknown;
-
-  constructor() {
-    super();
-    this.ptr = symbols.node_create();
+  constructor(ptr: Pointer) {
+    this.ptr = ptr
   }
 
   get nodeType(): NodeType {
     return symbols.node_type(this.ptr) as NodeType;
   }
+}
 
-  get nodeName(): string {
-    const namePtr = symbols.node_name(this.ptr);
-    const name = new CString(namePtr).toString();
-    symbols.string_free(namePtr);
-    return name;
-  }
-
-  free() {
-    console.log('FREE')
+class Document extends Node {
+  constructor() {
+    super(symbols.doc_init()!);
   }
 }
 
-const elem = new Element()
-console.log(elem.nodeType)
-console.log(elem.nodeName)
+export class Element extends Node {
+  constructor(tagName: string) {
+    const s = Buffer.from(tagName)
+    super(symbols.elem_init(s, s.byteLength)!);
+  }
+
+  get tagName(): string {
+    return symbols.tag_name(this.ptr).toString();
+  }
+}
+
+class Attr {}
+class Text {}
+
+const nodeTypes = {
+  1: Element,
+  2: Attr,
+  3: Text,
+  // 4: 'CDATA_SECTION_NODE',
+  // 7: 'PROCESSING_INSTRUCTION_NODE',
+  // 8: 'COMMENT_NODE',
+  9: Document,
+  // 10: 'DOCUMENT_TYPE_NODE:',
+  // 11: 'DOCUMENT_FRAGMENT_NODE:',
+} as const
+
+
+const doc = new Document()
+console.log("doc", doc.nodeType)
+const elem = new Element("div")
+console.log('type', elem.nodeType)
+console.log('name', elem.tagName)
