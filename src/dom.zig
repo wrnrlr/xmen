@@ -5,20 +5,28 @@ const WriteError = std.fs.File.WriteError;
 const RenderError = WriteError || error{OutOfMemory};
 
 pub const NodeType = enum(u8) {
-    element_node = 1,
-    attribute_node = 2,
-    text_node = 3,
-    cdata_section_node = 4,
-    processing_instruction_node = 7,
-    comment_node = 8,
-    document_node = 9,
+    element = 1,
+    attribute = 2,
+    text = 3,
+    // cdata_section_node = 4,
+    // processing_instruction_node = 7,
+    // comment_node = 8,
+    document = 9,
 };
 
-pub const Node = union(enum) {
-    document: *Document,
+pub const Node = union(NodeType) {
     element: *Element,
-    text: *Text,
     attribute: *Attr,
+    text: *Text,
+    document: *Document,
+
+    pub fn deinit(self: Node) void {
+      switch (self) {
+          .document => self.document.deinit(),
+          .element => self.element.deinit(),
+          else => {}
+      }
+    }
 
     pub fn getNodeType(self: Node) NodeType {
         return switch (self) {
@@ -40,10 +48,18 @@ pub const Node = union(enum) {
 };
 
 pub const Document = struct {
-    nodeType: NodeType = .document_node,
-    tagName: []const u8,
+    nodeType: NodeType = .document,
     children: std.ArrayList(Node),
-    parentElement: ?*Element = null,
+
+    pub fn init(allocator: Allocator) Document {
+        return Document{
+            .children = std.ArrayList(Node).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Document) void {
+        self.children.deinit();
+    }
 
     pub fn render(self: Document, writer: anytype) RenderError!void {
         for (self.children.items) |child| {
@@ -53,10 +69,10 @@ pub const Document = struct {
 };
 
 pub const Element = struct {
-    nodeType: NodeType = .element_node,
+    nodeType: NodeType = .element,
     tagName: []const u8,
-    attributes: std.ArrayList(Attr),
-    children: std.ArrayList(Node),
+    attributes: std.ArrayList(Attr) = undefined,
+    children: std.ArrayList(Node) = undefined,
     parentElement: ?*Element = null,
 
     pub fn init(allocator: Allocator, tagName: []const u8) Element {
@@ -66,6 +82,11 @@ pub const Element = struct {
             .children = std.ArrayList(Node).init(allocator),
             .parentElement = null,
         };
+    }
+
+    pub fn deinit(self: *Element) void {
+        self.attributes.deinit();
+        self.children.deinit();
     }
 
     pub fn appendChild(self: *Element, child: *Node) !*Node {
@@ -116,15 +137,10 @@ pub const Element = struct {
         }
         try writer.print("</{s}>", .{self.tagName});
     }
-
-    pub fn deinit(self: *Element) void {
-        self.attributes.deinit();
-        self.children.deinit();
-    }
 };
 
 pub const Text = struct {
-    nodeType: NodeType = .text_node,
+    nodeType: NodeType = .text,
     content: []const u8,
     parentElement: ?*Element = null,
 
@@ -134,7 +150,7 @@ pub const Text = struct {
 };
 
 pub const Attr = struct {
-    nodeType: NodeType = .attribute_node,
+    nodeType: NodeType = .attribute,
     name: []const u8,
     value: []const u8,
     parentElement: ?*Element = null,
@@ -147,16 +163,8 @@ pub const Attr = struct {
 const testing = std.testing;
 
 test "Node.getNodeType returns correct node type" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var doc = Document{
-        .nodeType = NodeType.document_node, // Explicitly set nodeType
-        .tagName = "document",
-        .children = std.ArrayList(Node).init(allocator),
-    };
-    var elem = Element.init(allocator, "div");
+    var doc = Document.init(testing.allocator);
+    var elem = Element.init(testing.allocator, "div");
     var text = Text{ .content = "Hello" };
     var attr = Attr{ .name = "id", .value = "test" };
 
@@ -165,32 +173,23 @@ test "Node.getNodeType returns correct node type" {
     var text_node = Node{ .text = &text };
     var attr_node = Node{ .attribute = &attr };
 
-    try testing.expectEqual(NodeType.document_node, doc_node.getNodeType());
-    try testing.expectEqual(NodeType.element_node, elem_node.getNodeType());
-    try testing.expectEqual(NodeType.text_node, text_node.getNodeType());
-    try testing.expectEqual(NodeType.attribute_node, attr_node.getNodeType());
+    try testing.expectEqual(NodeType.document, doc_node.getNodeType());
+    try testing.expectEqual(NodeType.element, elem_node.getNodeType());
+    try testing.expectEqual(NodeType.text, text_node.getNodeType());
+    try testing.expectEqual(NodeType.attribute, attr_node.getNodeType());
 }
 
 test "Element.init creates element with correct properties" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const elem = Element.init(allocator, "div");
-
+    const elem = Element.init(testing.allocator, "div");
     try testing.expectEqualStrings("div", elem.tagName);
-    try testing.expectEqual(NodeType.element_node, elem.nodeType);
+    try testing.expectEqual(NodeType.element, elem.nodeType);
     try testing.expectEqual(@as(usize, 0), elem.attributes.items.len);
     try testing.expectEqual(@as(usize, 0), elem.children.items.len);
     try testing.expectEqual(@as(?*Element, null), elem.parentElement);
 }
 
 test "Element.setAttribute and getAttribute work correctly" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var elem = Element.init(allocator, "div");
+    var elem = Element.init(testing.allocator, "div");
     try elem.setAttribute("id", "test");
     try elem.setAttribute("class", "container");
 
@@ -200,15 +199,12 @@ test "Element.setAttribute and getAttribute work correctly" {
     try elem.setAttribute("id", "new-id");
     try testing.expectEqualStrings("new-id", elem.getAttribute("id").?);
     try testing.expectEqual(@as(usize, 2), elem.attributes.items.len);
+    elem.deinit();
 }
 
 test "Element.appendChild sets parent and adds child" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var parent = Element.init(allocator, "div");
-    var child_elem = Element.init(allocator, "span");
+    var parent = Element.init(testing.allocator, "div");
+    var child_elem = Element.init(testing.allocator, "span");
     var text = Text{ .content = "Hello" };
 
     var child_node = Node{ .element = &child_elem };
@@ -221,6 +217,8 @@ test "Element.appendChild sets parent and adds child" {
     _ = try parent.appendChild(&text_node);
     try testing.expectEqual(@as(usize, 2), parent.children.items.len);
     try testing.expectEqual(&parent, text.parentElement);
+    parent.deinit();
+    child_elem.deinit();
 }
 
 test "Render simple element with attributes and text" {
@@ -271,11 +269,7 @@ test "Document renders children" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var doc = Document{
-        .nodeType = NodeType.document_node, // Explicitly set nodeType
-        .tagName = "document",
-        .children = std.ArrayList(Node).init(allocator),
-    };
+    var doc = Document.init(allocator);
     var elem = Element.init(allocator, "p");
     var text = Text{ .content = "Document content" };
     var text_node = Node{ .text = &text };
