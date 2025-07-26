@@ -7,59 +7,67 @@ const Element = dom.Element;
 const Document = dom.Document;
 const Text = dom.Text;
 const Attr = dom.Attr;
+const NodeType = dom.NodeType;
 
 const global_allocator = std.heap.page_allocator;
 
-// Only support creating a new Element for now
-pub export fn node_create(tag_name: [*c]const u8) ?*Element {
-    const tag = std.mem.span(tag_name);
-    const elem = global_allocator.create(Element) catch return null;
-    elem.* = Element.init(global_allocator, tag);
-    return elem;
+pub export fn doc_init() ?*Node {
+    const node = global_allocator.create(Node) catch return null;
+    const doc = global_allocator.create(Document) catch {
+      global_allocator.destroy(node);
+      return null;
+    };
+    doc.* = Document.init(global_allocator);
+    node.* = Node{ .document = doc };
+    return node;
 }
 
-pub export fn node_free(node: ?*anyopaque) i32 {
-  const elem:*Element = @ptrCast(@alignCast(node));
-  elem.deinit();
-  global_allocator.destroy(elem);
+pub export fn elem_init(buf: [*c]const u8, len: usize) ?*Node {
+    const node = global_allocator.create(Node) catch return null;
+    const elem = global_allocator.create(Element) catch {
+      global_allocator.destroy(node);
+      return null;
+    };
+    elem.* = Element.init(global_allocator, buf[0..len]);
+    node.* = Node{ .element = elem };
+    return node;
+}
+
+pub export fn node_free(ptr: ?*anyopaque) i32 {
+  if (ptr == null) return 0;
+  const node:*Node = @ptrCast(@alignCast(ptr));
+  node.deinit();
+  global_allocator.destroy(node);
   return 0;
 }
 
-pub export fn node_type(node: ?*anyopaque) i32 {
-  const elem:*Element = @ptrCast(@alignCast(node));
-  std.debug.print("Debug: Actual nodeType value is {d}\n", .{@intFromEnum(elem.nodeType)});
-  return @intFromEnum(elem.nodeType);
+pub export fn node_type(node: ?*anyopaque) u8 {
+    if (node) |ptr| {
+        const n: *Node = @ptrCast(@alignCast(ptr));
+        return @intFromEnum(n.getNodeType());
+    }
+    return 0;
 }
 
-// return a copy of the string not a reference
-pub export fn node_name(node: *anyopaque) [*c]u8 {
-    const elem:*Element = @ptrCast(@alignCast(node));
-    const c_str = global_allocator.dupeZ(u8, elem.tagName) catch return null;
-    return @as([*c]u8, c_str.ptr);  // Returns a C string that needs to be freed by the caller
+pub export fn tag_name(node: *anyopaque) [*c]u8 {
+    const n:*Node = @ptrCast(@alignCast(node));
+    const c_str = global_allocator.dupeZ(u8, n.element.tagName) catch return null;
+    return @as([*c]u8, c_str.ptr);
 }
 
 const testing = std.testing;
 
-test "ffi_node" {
-    // Test that node_create returns a valid pointer and node_free works without crashing
-    const tag_name = "test_node";
-    const elem_ptr = node_create(tag_name.ptr);
-    try testing.expect(elem_ptr != null);
+test "ffi doc_init" {
+    const ptr = doc_init();
 
-    // Test node_type
-    const type_value = node_type(elem_ptr);
-    try testing.expectEqual(@as(i32, 1), type_value);  // Expecting element_node which is 1
+    try testing.expectEqual(@as(u8, @intFromEnum(NodeType.document)), node_type(ptr));
+    try testing.expectEqual(@as(i32, 0), node_free(ptr));
+}
 
-    // Test node_name
-    const name_ptr = node_name(elem_ptr.?);
-    if (name_ptr != null) {
-        const name = std.mem.span(name_ptr);
-        try testing.expect(std.mem.eql(u8, name, tag_name));
-        // Free the allocated string
-        const allocator = std.heap.page_allocator;
-        allocator.free(name);
-    }
+test "ffi elem_init" {
+  var tag = "a";
+  const ptr = elem_init(@as([*c]const u8, &tag[0]), tag.len);
 
-    const free_result = node_free(elem_ptr);
-    try testing.expectEqual(@as(i32, 0), free_result);
+  try testing.expectEqual(@as(u8, @intFromEnum(NodeType.element)), node_type(ptr));
+  try testing.expectEqual(@as(i32, 0), node_free(ptr));
 }
