@@ -8,13 +8,20 @@ pub const NodeType = enum(u8) {
     element = 1,
     attribute = 2,
     text = 3,
-    // cdata_section_node = 4,
-    // processing_instruction_node = 7,
-    // comment_node = 8,
+    cdata = 4,
+    processing_instruction = 7,
+    comment = 8,
     document = 9,
 };
 
-pub const Node = union(NodeType) {
+const InternalType = enum(u8) {
+    element = 1,
+    attribute = 2,
+    text = 3,
+    document = 9,
+};
+
+pub const Node = union(InternalType) {
     element: *Element,
     attribute: *Attr,
     text: *Text,
@@ -39,43 +46,43 @@ pub const Node = union(NodeType) {
     pub fn setAttributeNode(node: Node, attr: *Node) void {
       switch (node) {
           .element => |elem| elem.setAttributeNode(node, attr),
-          else => {}
+          else => @panic("oops")
       }
     }
 
     pub fn setParentElement(self: Node, parent: *Node) void {
         switch (self) {
-            .document => null,
             .element => |elem| elem.parentElement = parent,
+            .attribute => |attr| attr.parentElement = parent,
             .text => |text| text.parentElement = parent,
-            .attribute => |attr| attr.parentElement = parent
+            .document => null,
         }
     }
 
     pub fn getParentElement(self: Node) ?*Node {
         return switch (self) {
+            .element => |elem| elem.parentElement,
+            .attribute => |attr| attr.parentElement,
+            .text => |text| text.parentElement,
             .document => null,
-            .element => self.element.parentElement,
-            .text => self.text.parentElement,
-            .attribute => self.attribute.parentElement,
         };
     }
 
     pub fn getNodeType(self: Node) NodeType {
         return switch (self) {
-            .document => self.document.nodeType,
-            .element => self.element.nodeType,
+            .document => NodeType.document,
+            .element => NodeType.element,
             .text => self.text.nodeType,
-            .attribute => self.attribute.nodeType,
+            .attribute => NodeType.attribute,
         };
     }
 
     pub fn render(self: Node, writer: anytype) RenderError!void {
         switch (self) {
-            .document => try self.document.render(writer),
-            .element => try self.element.render(writer),
-            .text => try self.text.render(writer),
-            .attribute => try self.attribute.render(writer),
+            .document => |doc| try doc.render(writer),
+            .element => |elem| try elem.render(writer),
+            .text => |text| try text.render(writer),
+            .attribute => |attr| try attr.render(writer),
         }
     }
 };
@@ -194,16 +201,6 @@ pub const Element = struct {
   }
 };
 
-pub const Text = struct {
-    nodeType: NodeType = .text,
-    content: []const u8,
-    parentElement: ?*Node = null,
-
-    fn render(self: Text, writer: anytype) RenderError!void {
-        try writer.print("{s}", .{self.content});
-    }
-};
-
 pub const NamedNodeMap = struct {
     node: *Node,
     items: std.ArrayList(Node) = undefined,
@@ -232,7 +229,6 @@ pub const NamedNodeMap = struct {
 };
 
 pub const Attr = struct {
-    nodeType: NodeType = .attribute,
     name: []const u8,
     value: []const u8,
     parentElement: ?*Node = null,
@@ -246,6 +242,54 @@ pub const Attr = struct {
     }
 };
 
+pub const Text = struct {
+    nodeType: NodeType,
+    content: []const u8,
+    parentElement: ?*Node = null,
+
+    fn text(content: []const u8, parent: ?*Node) Text {
+      return Text{ .nodeType = NodeType.text, .content = content, .parentElement = parent };
+    }
+
+    fn cdata(content: []const u8, parent: ?*Node) Text {
+      return Text{ .nodeType = NodeType.cdata, .content = content, .parentElement = parent };
+    }
+
+    fn instruction(content: []const u8, parent: ?*Node) Text {
+      return Text{ .nodeType = NodeType.processing_instruction, .content = content, .parentElement = parent };
+    }
+
+    fn comment(content: []const u8, parent: ?*Node) Text {
+      return Text{ .nodeType = NodeType.comment, .content = content, .parentElement = parent };
+    }
+
+    fn render(self: Text, writer: anytype) RenderError!void {
+        try switch (self.nodeType) {
+          NodeType.cdata => self.render_cdata(writer),
+          NodeType.comment => self.render_cdata(writer),
+          NodeType.processing_instruction => self.render_instruction(writer),
+          NodeType.text => self.render_text(writer),
+          else => {}
+        };
+    }
+
+    fn render_text(self: Text, writer: anytype) RenderError!void {
+      try writer.print("{s}", .{self.content});
+    }
+
+    fn render_instruction(self: Text, writer: anytype) RenderError!void {
+      try writer.print("<?{s}?>", .{self.content});
+    }
+
+    fn render_comment(self: Text, writer: anytype) RenderError!void {
+      try writer.print("<!--{s}-->", .{self.content});
+    }
+
+    fn render_cdata(self: Text, writer: anytype) RenderError!void {
+      try writer.print("<![CDATA[{s}]]>", .{self.content});
+    }
+};
+
 const testing = std.testing;
 
 test "Node.getNodeType" {
@@ -255,11 +299,20 @@ test "Node.getNodeType" {
     var elem = Node{ .element = @constCast(&Element.init(testing.allocator, "div")) };
     try testing.expectEqual(NodeType.element, elem.getNodeType());
 
-    var text = Node{ .text = @constCast(&Text{ .content = "Hello" }) };
-    try testing.expectEqual(NodeType.text, text.getNodeType());
-
     var attr = Node{ .attribute = @constCast(&Attr{ .name = "id", .value = "test" }) };
     try testing.expectEqual(NodeType.attribute, attr.getNodeType());
+
+    var cdata = Node{ .text = @constCast(&Text.cdata("cdata", null)) };
+    try testing.expectEqual(NodeType.cdata, cdata.getNodeType());
+
+    var comment = Node{ .text = @constCast(&Text.comment("comment", null)) };
+    try testing.expectEqual(NodeType.comment, comment.getNodeType());
+
+    var text = Node{ .text = @constCast(&Text.text("text", null)) };
+    try testing.expectEqual(NodeType.text, text.getNodeType());
+
+    var instruction = Node{ .text = @constCast(&Text.instruction("instruction", null)) };
+    try testing.expectEqual(NodeType.processing_instruction, instruction.getNodeType());
 }
 
 test "Node.parentElement" {
@@ -272,7 +325,7 @@ test "Node.parentElement" {
     elem.element.parentElement = &doc;
     try testing.expectEqual(&doc, elem.getParentElement());
 
-    var text = Node{ .text = @constCast(&Text{ .content = "Hello" }) };
+    var text = Node{ .text = @constCast(&Text.text("Hi", null)) };
     try testing.expectEqual(null, text.getParentElement());
 
     text.text.parentElement = &elem;
@@ -295,7 +348,7 @@ test "Node.render" {
     try elem.element.setAttributeNode(&elem, @constCast(&attr));
 
     var a = Node{ .element = @constCast(&Element.init(allocator, "a")) };
-    var text = Node{ .text = @constCast(&Text{ .content = "Hi" }) };
+    var text = Node{ .text = @constCast(&Text.text("Hi", &a)) };
 
     // var doc = Node{ .document = @constCast(&Document.init(allocator)) };
     // _ = try doc.document.appendChild(&doc, &elem);
