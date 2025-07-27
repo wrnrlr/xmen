@@ -217,13 +217,13 @@ pub const NamedNodeMap = struct {
         return self.node.element.getAttributeNode(name);
     }
 
-    pub fn setNamedItem(self: NamedNodeMap, attr: *Node) void {
+    pub fn setNamedItem(self: NamedNodeMap, attr: *Node) !void {
         std.debug.assert(attr.* == .attribute);
-        return self.node.element.setAttributeNode(self.node, attr);
+        return self.node.element.setAttributeNode(self.node, attr) catch {};
     }
 
     pub fn removeNamedItem(self: NamedNodeMap, name: []u8) void {
-      self.node.element.removeAttribute(name);
+      self.node.element.removeAttribute(name) catch {};
     }
 
     pub fn length() i32 { return 0; }
@@ -283,6 +283,34 @@ test "Node.parentElement" {
 
     attr.attribute.parentElement = &elem;
     try testing.expectEqual(&elem, attr.getParentElement());
+}
+
+test "Node.render" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var elem = Node{ .element = @constCast(&Element.init(allocator, "p")) };
+    const attr = Node{ .attribute = @constCast(&Attr.init("id", "1", &elem)) };
+    try elem.element.setAttributeNode(&elem, @constCast(&attr));
+
+    var a = Node{ .element = @constCast(&Element.init(allocator, "a")) };
+    var text = Node{ .text = @constCast(&Text{ .content = "Hi" }) };
+
+    // var doc = Node{ .document = @constCast(&Document.init(allocator)) };
+    // _ = try doc.document.appendChild(&doc, &elem);
+
+    _ = try a.appendChild(&text);
+    _ = try elem.appendChild(&a);
+
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
+    try elem.render(buffer.writer());
+
+    try testing.expectEqualStrings("<p id=\"1\"><a>Hi</a></p>", buffer.items);
+
+    elem.deinit();
+    attr.deinit();
 }
 
 test "Element.init" {
@@ -348,54 +376,64 @@ test "Element.appendChild sets parent and adds child" {
 //     child_elem.deinit();
 }
 
-test "NamedNodeList.init" {
-
+test "NamedNodeMap.init" {
+    const allocator = testing.allocator;
+    var elem = Node{ .element = @constCast(&Element.init(allocator, "div")) };
+    var items = std.ArrayList(Node).init(allocator);
+    const namedNodeMap = NamedNodeMap.init(&elem, items);
+    try testing.expectEqual(.element, namedNodeMap.node.*.element.nodeType);
+    items.deinit();
 }
 
 test "NamedNodeList.getNamedItem" {
-
-}
-
-test "NamedNodeList.setNamedItem" {
-
-}
-
-test "NamedNodeList.removeNamedItem" {
-
-}
-
-test "NamedNodeList.length" {
-
-}
-
-
-test "Attr.init" {}
-
-
-test "Node.render" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var elem = Node{ .element = @constCast(&Element.init(allocator, "p")) };
-    const attr = Node{ .attribute = @constCast(&Attr.init("id", "1", &elem)) };
-    try elem.element.setAttributeNode(&elem, @constCast(&attr));
-
-    var a = Node{ .element = @constCast(&Element.init(allocator, "a")) };
-    var text = Node{ .text = @constCast(&Text{ .content = "Hi" }) };
-
-    // var doc = Node{ .document = @constCast(&Document.init(allocator)) };
-    // _ = try doc.document.appendChild(&doc, &elem);
-
-    _ = try a.appendChild(&text);
-    _ = try elem.appendChild(&a);
-
-    var buffer = std.ArrayList(u8).init(allocator);
-    defer buffer.deinit();
-    try elem.render(buffer.writer());
-
-    try testing.expectEqualStrings("<p id=\"1\"><a>Hi</a></p>", buffer.items);
-
+    const allocator = testing.allocator;
+    var elem = Node{ .element = @constCast(&Element.init(allocator, "div")) };
+    var items = std.ArrayList(Node).init(allocator);
+    var namedNodeMap = NamedNodeMap.init(&elem, items);
+    var attr = Node{ .attribute = @constCast(&Attr.init("id", "test", &elem)) };
+    _ = namedNodeMap.setNamedItem(&attr) catch {};
+    const item = namedNodeMap.getNamedItem(@constCast("id"));
+    try testing.expect(item != null);
+    try testing.expectEqualStrings("test", item.?.attribute.value);
     elem.deinit();
     attr.deinit();
+    items.deinit();
+}
+
+test "NamedNodeMap.setNamedItem" {
+    const allocator = testing.allocator;
+    var elem = Node{ .element = @constCast(&Element.init(allocator, "div")) };
+    var items = std.ArrayList(Node).init(allocator);
+    var namedNodeMap = NamedNodeMap.init(&elem, items);
+    var attr = Node{ .attribute = @constCast(&Attr.init("id", "test", &elem)) };
+    try elem.element.setAttributeNode(&elem, @constCast(&attr));
+    const item = namedNodeMap.getNamedItem(@constCast("id"));
+    try testing.expect(item != null);
+    try testing.expectEqualStrings("test", item.?.attribute.value);
+    elem.deinit();
+    attr.deinit();
+    items.deinit();
+}
+
+test "NamedNodeMap.removeNamedItem" {
+    const allocator = testing.allocator;
+    var elem = Node{ .element = @constCast(&Element.init(allocator, "div")) };
+    var items = std.ArrayList(Node).init(allocator);
+    var namedNodeMap = NamedNodeMap.init(&elem, items);
+    var attr = Node{ .attribute = @constCast(&Attr.init("id", "test", &elem)) };
+    namedNodeMap.setNamedItem(&attr) catch {};
+    namedNodeMap.removeNamedItem(@constCast("id"));
+    const item = namedNodeMap.getNamedItem(@constCast("id"));
+    try testing.expect(item == null);
+    elem.deinit();
+    attr.deinit();
+    items.deinit();
+}
+
+test "NamedNodeMap.length" {
+
+}
+
+test "Attr.init" {
+
 }
