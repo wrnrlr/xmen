@@ -247,19 +247,19 @@ pub const Text = struct {
     content: []const u8,
     parentElement: ?*Node = null,
 
-    fn text(content: []const u8, parent: ?*Node) Text {
+    pub fn text(content: []const u8, parent: ?*Node) Text {
       return Text{ .nodeType = NodeType.text, .content = content, .parentElement = parent };
     }
 
-    fn cdata(content: []const u8, parent: ?*Node) Text {
+    pub fn cdata(content: []const u8, parent: ?*Node) Text {
       return Text{ .nodeType = NodeType.cdata, .content = content, .parentElement = parent };
     }
 
-    fn instruction(content: []const u8, parent: ?*Node) Text {
+    pub fn instruction(content: []const u8, parent: ?*Node) Text {
       return Text{ .nodeType = NodeType.processing_instruction, .content = content, .parentElement = parent };
     }
 
-    fn comment(content: []const u8, parent: ?*Node) Text {
+    pub fn comment(content: []const u8, parent: ?*Node) Text {
       return Text{ .nodeType = NodeType.comment, .content = content, .parentElement = parent };
     }
 
