@@ -12,12 +12,11 @@ const { symbols } = dlopen(path, {
   attr_name: { args: [ptr], returns: cstring },
   attr_val: { args: [ptr], returns: cstring },
   attr_set: { args: [ptr, cstring, usize], returns: i32 },
-  // Element related functions for Attribute
   attr_get: { args: [ptr, cstring, usize], returns: ptr },
   attr_add: { args: [ptr, cstring, usize, cstring, usize], returns: ptr },
   attr_del: { args: [ptr, cstring, usize], returns: i32 },
-  // Parser functions
   parse: { args: [cstring, usize], returns: ptr },
+  xpath_eval: { args: [cstring, usize, ptr], returns: ptr },
 });
 
 export enum NodeType {
@@ -33,7 +32,7 @@ export enum NodeType {
 }
 
 export abstract class Node {
-  protected readonly ptr: Pointer;
+  public readonly ptr: Pointer;
 
   constructor(ptr: Pointer) {
     this.ptr = ptr;
@@ -45,17 +44,17 @@ export abstract class Node {
 }
 
 class Document extends Node {
-  constructor() {
-    super(symbols.doc_init()!);
+  constructor(ptr: Pointer) {
+    super(ptr || symbols.doc_init()!)
   }
 }
 
-export class Element extends Node {
-  constructor(tagName: string) {
-    const s = Buffer.from(tagName);
-    super(symbols.elem_init(s, s.byteLength)!);
-  }
+function createElement(tagName: string): Element {
+  const buf = Buffer.from(tagName);
+  return new Element(symbols.elem_init(buf, buf.byteLength)!)
+}
 
+export class Element extends Node {
   get tagName(): string {
     return symbols.tag_name(this.ptr).toString();
   }
@@ -185,6 +184,8 @@ const nodeTypes = {
   9: Document,
 } as const;
 
+// Parser
+
 export function parseXML(xml: string): Node | null {
   const buf = Buffer.from(xml);
   const nodePtr = symbols.parse(buf, buf.length);
@@ -196,8 +197,18 @@ export function parseXML(xml: string): Node | null {
     symbols.node_free(nodePtr);
     return null;
   }
-
   return new NodeClass(nodePtr);
+}
+
+// XPath
+
+function xpath(xpath: string, node: Node): Node | null {
+  const buf = Buffer.from(xpath);
+  const ptr = symbols.xpath_eval(buf, buf.length, node.ptr);
+  if (ptr === null) return null;
+
+  const nodeType = symbols.node_type(ptr) as NodeType;
+  return symbols.node_type(ptr) === 1 ? new Element(ptr) : new Document(ptr)
 }
 
 // Example usage
@@ -221,3 +232,7 @@ const xml = `
 `;
 const parsedNode = parseXML(xml);
 console.log('parsed node type', parsedNode?.nodeType);
+
+// Test XPath
+const xpathResult = parsedNode?.evaluateXPath("/root/child[@class=\"test\"]");
+console.log('xpath result type', xpathResult?.nodeType);

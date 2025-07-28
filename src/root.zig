@@ -159,6 +159,13 @@ pub export fn parse(text: [*:0]const u8) ?*anyopaque {
     return node;
 }
 
+pub export fn xpath_eval(text: [*:0]const u8) ?*anyopaque {
+    const xml_slice = std.mem.span(text);
+    const parser = DOMParser.init(alloc) catch return null;
+    const node = parser.parse(xml_slice) catch return null;
+    return node;
+}
+
 const testing = std.testing;
 
 fn checkNodeType(ptr: ?*anyopaque, expected: NodeType) !void {
