@@ -426,12 +426,12 @@ pub export fn destroy_parser(parser: *SaxParser) void {
     parser.allocator.destroy(parser);
 }
 
-pub export fn parse(parser: *SaxParser, input: [*]const u8, len: usize) void {
-    _ = parser.write(input[0..len]) catch |err| {
-        std.debug.print("Error in parser.write: {any}\n", .{err});
-        return;
-    };
-}
+// pub export fn parse(parser: *SaxParser, input: [*]const u8, len: usize) void {
+//     _ = parser.write(input[0..len]) catch |err| {
+//         std.debug.print("Error in parser.write: {any}\n", .{err});
+//         return;
+//     };
+// }
 
 const testing = std.testing;
 
