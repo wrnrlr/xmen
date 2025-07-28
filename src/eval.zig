@@ -160,3 +160,184 @@ pub fn main() !void {
         try writer.print("\n", .{});
     }
 }
+
+const testing = std.testing;
+
+test "XPathEvaluator: simple path evaluation" {
+    const allocator = testing.allocator;
+
+    // Create a simple XML document
+    var doc = Document.init(allocator);
+    defer doc.deinit();
+
+    var root = Element.init(allocator, "root");
+    defer root.deinit();
+    var child = Element.init(allocator, "child");
+    defer child.deinit();
+
+    var child_node = Node{ .element = &child };
+    try root.appendChild(&child_node);
+    const root_node = Node{ .element = &root };
+    try doc.children.append(root_node);
+
+    // Parse and evaluate XPath
+    const xpath_str = "/root/child";
+    var parser = XPathParser.init(allocator);
+    const ast = try parser.parse(xpath_str);
+    defer {
+        ast.deinit(allocator);
+        allocator.destroy(ast);
+    }
+
+    var evaluator = XPathEvaluator.init(allocator);
+    var result = try evaluator.evaluate(&doc, ast);
+    defer result.deinit();
+
+    // Verify results
+    try testing.expectEqual(@as(usize, 1), result.nodes.items.len);
+    try testing.expectEqual(NodeType.element, result.nodes.items[0].getNodeType());
+    try testing.expectEqualStrings("child", result.nodes.items[0].element.tagName);
+}
+
+test "XPathEvaluator: path with predicate" {
+    const allocator = testing.allocator;
+
+    // Create XML document with attributes
+    var doc = Document.init(allocator);
+    defer doc.deinit();
+
+    var root = Element.init(allocator, "root");
+    defer root.deinit();
+    var child = Element.init(allocator, "child");
+    defer child.deinit();
+    try child.setAttribute("attr", "value");
+    var child2 = Element.init(allocator, "child");
+    defer child2.deinit();
+    try child2.setAttribute("attr", "wrong");
+
+    var child_node = Node{ .element = &child };
+    try root.appendChild(&child_node);
+    var child2_node = Node{ .element = &child2 };
+    try root.appendChild(&child2_node);
+    const root_node = Node{ .element = &root };
+    try doc.children.append(root_node);
+
+    // Parse and evaluate XPath
+    const xpath_str = "/root/child[@attr=\"value\"]";
+    var parser = XPathParser.init(allocator);
+    const ast = try parser.parse(xpath_str);
+    defer {
+        ast.deinit(allocator);
+        allocator.destroy(ast);
+    }
+
+    var evaluator = XPathEvaluator.init(allocator);
+    var result = try evaluator.evaluate(&doc, ast);
+    defer result.deinit();
+
+    // Verify results
+    try testing.expectEqual(@as(usize, 1), result.nodes.items.len);
+    try testing.expectEqual(NodeType.element, result.nodes.items[0].getNodeType());
+    try testing.expectEqualStrings("child", result.nodes.items[0].element.tagName);
+    try testing.expectEqualStrings("value", result.nodes.items[0].element.getAttribute("attr").?);
+}
+
+test "XPathEvaluator: complex path" {
+    const allocator = testing.allocator;
+
+    // Create complex XML document
+    var doc = Document.init(allocator);
+    defer doc.deinit();
+
+    var root = Element.init(allocator, "root");
+    defer root.deinit();
+    var child = Element.init(allocator, "child");
+    defer child.deinit();
+    try child.setAttribute("attr", "value");
+    var grandchild = Element.init(allocator, "grandchild");
+    defer grandchild.deinit();
+
+    var grandchild_node = Node{ .element = &grandchild };
+    try child.appendChild(&grandchild_node);
+    var child_node = Node{ .element = &child };
+    try root.appendChild(&child_node);
+    const root_node = Node{ .element = &root };
+    try doc.children.append(root_node);
+
+    // Parse and evaluate XPath
+    const xpath_str = "/root/child[@attr=\"value\"]/grandchild";
+    var parser = XPathParser.init(allocator);
+    const ast = try parser.parse(xpath_str);
+    defer {
+        ast.deinit(allocator);
+        allocator.destroy(ast);
+    }
+
+    var evaluator = XPathEvaluator.init(allocator);
+    var result = try evaluator.evaluate(&doc, ast);
+    defer result.deinit();
+
+    // Verify results
+    try testing.expectEqual(@as(usize, 1), result.nodes.items.len);
+    try testing.expectEqual(NodeType.element, result.nodes.items[0].getNodeType());
+    try testing.expectEqualStrings("grandchild", result.nodes.items[0].element.tagName);
+}
+
+test "XPathEvaluator: no matching nodes" {
+    const allocator = testing.allocator;
+
+    // Create XML document
+    var doc = Document.init(allocator);
+    defer doc.deinit();
+
+    var root = Element.init(allocator, "root");
+    defer root.deinit();
+    var child = Element.init(allocator, "child");
+    defer child.deinit();
+    try child.setAttribute("attr", "wrong");
+
+    var child_node = Node{ .element = &child };
+    try root.appendChild(&child_node);
+    const root_node = Node{ .element = &root };
+    try doc.children.append(root_node);
+
+    // Parse and evaluate XPath
+    const xpath_str = "/root/child[@attr=\"value\"]";
+    var parser = XPathParser.init(allocator);
+    const ast = try parser.parse(xpath_str);
+    defer {
+        ast.deinit(allocator);
+        allocator.destroy(ast);
+    }
+
+    var evaluator = XPathEvaluator.init(allocator);
+    var result = try evaluator.evaluate(&doc, ast);
+    defer result.deinit();
+
+    // Verify no matches
+    try testing.expectEqual(@as(usize, 0), result.nodes.items.len);
+}
+
+test "XPathEvaluator: empty document" {
+    const allocator = testing.allocator;
+
+    // Create empty document
+    var doc = Document.init(allocator);
+    defer doc.deinit();
+
+    // Parse and evaluate XPath
+    const xpath_str = "/root";
+    var parser = XPathParser.init(allocator);
+    const ast = try parser.parse(xpath_str);
+    defer {
+        ast.deinit(allocator);
+        allocator.destroy(ast);
+    }
+
+    var evaluator = XPathEvaluator.init(allocator);
+    var result = try evaluator.evaluate(&doc, ast);
+    defer result.deinit();
+
+    // Verify no matches
+    try testing.expectEqual(@as(usize, 0), result.nodes.items.len);
+}
