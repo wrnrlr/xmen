@@ -160,13 +160,8 @@ pub const DomParser = struct {
                 }
             },
             .processing_instruction => {
-                // Skip XML declaration (<?xml ...?>)
                 const pi_data = entity.data.processing_instruction;
-                const content = pi_data.value[0..(pi_data.header[1] - pi_data.header[0])];
-                if (std.mem.startsWith(u8, content, "xml ")) {
-                    // Skip XML declaration
-                    return;
-                }
+                const content = try self.allocator.dupe(u8, pi_data.value[0..(pi_data.header[1] - pi_data.header[0])]);
                 const text_node = try self.allocator.create(Node);
                 const text = try self.allocator.create(Text);
                 text.* = Text.instruction(content, self.current_element);
