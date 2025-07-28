@@ -9,9 +9,14 @@ const { symbols } = dlopen(path, {
   node_type: { args: [ptr], returns: u8 },
   tag_name: { args: [ptr], returns: cstring },
   attr_init: { args: [cstring, usize, cstring, usize], returns: ptr },
+  attr_name: { args: [ptr], returns: cstring },
+  attr_val: { args: [ptr], returns: cstring },
+  attr_set: { args: [ptr, cstring, usize], returns: i32 },
+
+  // Element related functions for Attribute
   attr_get: { args: [ptr, cstring, usize], returns: ptr },
-  attr_set: { args: [ptr, cstring, usize, cstring, usize], returns: ptr },
-  attr_has: { args: [ptr, cstring, usize], returns: i32 },
+  attr_add: { args: [ptr, cstring, usize, cstring, usize], returns: ptr },
+  // attr_has: { args: [ptr, cstring, usize], returns: i32 },
   attr_del: { args: [ptr, cstring, usize], returns: i32 },
 });
 
@@ -66,12 +71,16 @@ export class Element extends Node {
     return attr.toString()
   }
 
+  getAttributeNode(): Node|null { throw 'not implemented' }
+
   setAttribute(name: string, value: string): void {
     symbols.attr_set(this.ptr, Buffer.from(name), name.length, Buffer.from(value), value.length);
   }
 
+  setAttributeNode(node:Node) { throw 'not implemented' }
+
   hasAttribute(name: string): boolean {
-    return symbols.attr_has(this.ptr, Buffer.from(name), name.length) !== 0;
+    return false
   }
 }
 
