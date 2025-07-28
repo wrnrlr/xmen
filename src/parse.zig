@@ -49,7 +49,6 @@ pub const DomParser = struct {
     }
 
     fn freeNode(allocator: Allocator, node: *Node) void {
-        std.debug.print("Attempting to free node of type: {}\n", .{node.getNodeType()});
         switch (node.*) {
             .element => |elem| {
                 for (elem.attributes.items) |attr_node| {
@@ -74,7 +73,6 @@ pub const DomParser = struct {
                 // Free content for all text-based node types
                 if (text.nodeType == .text or text.nodeType == .cdata or
                     text.nodeType == .comment or text.nodeType == .processing_instruction) {
-                    std.debug.print("Freeing text content of length: {}\n", .{text.content.len});
                     allocator.free(text.content);
                 }
                 allocator.destroy(text);
@@ -234,7 +232,6 @@ test "parse XML" {
 
     // Verify first child is a processing instruction (XML declaration)
     const first_child = doc.document.children.items[0];
-    std.debug.print("\nPI: {*} \n", .{first_child});
     // try std.testing.expectEqual(NodeType.processing_instruction, first_child.);
     try std.testing.expectEqualStrings("xml version=\"1.0\" encoding=\"UTF-8\"", first_child.text.content);
 

@@ -152,6 +152,13 @@ pub export fn attr_del(elem: *anyopaque, name: [*c]const u8, name_len: usize) u3
     return 0;
 }
 
+pub export fn parse_xml(xml: [*:0]const u8) ?*anyopaque {
+    const xml_slice = std.mem.span(xml);
+    const parser = DOMParser.init(alloc) catch return null;
+    const node = parser.parse(xml_slice) catch return null;
+    return node;
+}
+
 const testing = std.testing;
 
 fn checkNodeType(ptr: ?*anyopaque, expected: NodeType) !void {
