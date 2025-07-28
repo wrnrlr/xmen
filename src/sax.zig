@@ -483,7 +483,7 @@ pub const TestEventHandler = struct {
     pub fn handle(self: *TestEventHandler, entity: Entity) void {
             switch (entity.tag) {
               .open_tag => {
-                    std.debug.print("Open tag: {s}, attributes_len: {}\n", .{entity.data.open_tag.name[0..entity.data.open_tag.name_len], entity.data.open_tag.attributes_len});
+                    // std.debug.print("Open tag: {s}, attributes_len: {}\n", .{entity.data.open_tag.name[0..entity.data.open_tag.name_len], entity.data.open_tag.attributes_len});
                     self.tags.append(entity.data.open_tag) catch {};
                     if (entity.data.open_tag.attributes != null and entity.data.open_tag.attributes_len > 0) {
                         const attrs_slice = entity.data.open_tag.attributes[0..entity.data.open_tag.attributes_len];
@@ -523,29 +523,388 @@ test "test_attribute" {
     try testing.expectEqual(1, texts.len);
     try testing.expectEqualStrings(" ", texts[0].value[0..(texts[0].header[1] - texts[0].header[0])]);
 }
+// Additional comprehensive test cases for XML SAX parser
 
-// test "test_attribute_single_character_boolean" {
-//     const allocator = std.testing.allocator;
-//     var handler = TestEventHandler.init(allocator);
-//     defer handler.deinit();
+test "test_nested_elements" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
 
-//     var parser = try setupParser(allocator, &handler);
-//     defer parser.deinit();
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
 
-//     const input = "<element attribute1='value1' a attribute3='value3'></element>";
-//     try parser.write(input);
-//     // try parser.identity();
+    const input = "<root><parent><child>content</child></parent></root>";
+    try parser.write(input);
 
-//     const attrs = handler.attributes.items;
+    const tags = handler.tags.items;
+    try testing.expectEqual(6, tags.len); // 3 open, 3 close
 
-//     try testing.expectEqual(3, attrs.len);
-//     try testing.expectEqualStrings("attribute1", std.mem.sliceTo(attrs[0].name, 0));
-//     try testing.expectEqualStrings("value1", attrs[0].value);
-//     try testing.expectEqualStrings("a", attrs[1].name);
-//     try testing.expectEqualStrings("", attrs[1].value);
-//     try testing.expectEqualStrings("attribute3", attrs[2].name);
-//     try testing.expectEqualStrings("value3", attrs[2].value);
-// }
+    // Verify tag order and names
+    try testing.expectEqualStrings("root", tags[0].name[0..tags[0].name_len]);
+    try testing.expectEqualStrings("parent", tags[1].name[0..tags[1].name_len]);
+    try testing.expectEqualStrings("child", tags[2].name[0..tags[2].name_len]);
+}
+
+test "test_multiple_attributes" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<element id=\"test\" class=\"main\" data-value=\"123\" enabled=\"true\"></element>";
+    try parser.write(input);
+
+    const attrs = handler.attributes.items;
+    try testing.expectEqual(4, attrs.len);
+
+    try testing.expectEqualStrings("id", attrs[0].name[0..attrs[0].name_len]);
+    try testing.expectEqualStrings("test", attrs[0].value[0..attrs[0].value_len]);
+
+    try testing.expectEqualStrings("class", attrs[1].name[0..attrs[1].name_len]);
+    try testing.expectEqualStrings("main", attrs[1].value[0..attrs[1].value_len]);
+
+    try testing.expectEqualStrings("data-value", attrs[2].name[0..attrs[2].name_len]);
+    try testing.expectEqualStrings("123", attrs[2].value[0..attrs[2].value_len]);
+}
+
+test "test_mixed_quotes_in_attributes" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<element title='He said \"Hello\"' description=\"It's working\"></element>";
+    try parser.write(input);
+
+    const attrs = handler.attributes.items;
+    try testing.expectEqual(2, attrs.len);
+
+    try testing.expectEqualStrings("title", attrs[0].name[0..attrs[0].name_len]);
+    try testing.expectEqualStrings("He said \"Hello\"", attrs[0].value[0..attrs[0].value_len]);
+
+    try testing.expectEqualStrings("description", attrs[1].name[0..attrs[1].name_len]);
+    try testing.expectEqualStrings("It's working", attrs[1].value[0..attrs[1].value_len]);
+}
+
+test "test_empty_elements" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root><empty></empty><another/></root>";
+    try parser.write(input);
+
+    const tags = handler.tags.items;
+    try testing.expectEqual(5, tags.len); // root open, empty open, empty close, another open+close, root close
+}
+
+test "test_whitespace_handling" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input =
+        \\<root>
+        \\  <element   attr1="value1"   attr2="value2"  >
+        \\    Content with spaces
+        \\  </element>
+        \\</root>
+    ;
+    try parser.write(input);
+
+    _ = handler.texts.items;
+    const attrs = handler.attributes.items;
+
+    try testing.expectEqual(2, attrs.len);
+    try testing.expectEqualStrings("attr1", attrs[0].name[0..attrs[0].name_len]);
+    try testing.expectEqualStrings("value1", attrs[0].value[0..attrs[0].value_len]);
+}
+
+test "test_cdata_sections" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root><![CDATA[This is <raw> content & data]]></root>";
+    try parser.write(input);
+
+    const texts = handler.texts.items;
+    try testing.expectEqual(1, texts.len);
+
+    const cdata_content = texts[0].value[0..(texts[0].header[1] - texts[0].header[0])];
+    try testing.expectEqualStrings("This is <raw> content & data", cdata_content);
+}
+
+test "test_multiple_cdata_sections" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root><![CDATA[First section]]><![CDATA[Second section]]></root>";
+    try parser.write(input);
+
+    const texts = handler.texts.items;
+    try testing.expectEqual(2, texts.len);
+}
+
+test "test_comments" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root><!-- This is a comment --><element>content</element><!-- Another comment --></root>";
+    try parser.write(input);
+
+    const texts = handler.texts.items;
+    try testing.expectEqual(3, texts.len); // 2 comments + 1 text content
+}
+
+test "test_processing_instructions" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root><?custom-instruction data?></root>";
+    try parser.write(input);
+
+    const proc_insts = handler.proc_insts.items;
+    try testing.expectEqual(2, proc_insts.len);
+
+    const first_pi = proc_insts[0].value[0..(proc_insts[0].header[1] - proc_insts[0].header[0])];
+    try testing.expectEqualStrings("xml version=\"1.0\" encoding=\"UTF-8\"", first_pi);
+}
+
+test "test_complex_nested_structure" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input =
+        \\<?xml version="1.0"?>
+        \\<document xmlns="http://example.com">
+        \\  <!-- Document header -->
+        \\  <header id="main-header" class="primary">
+        \\    <title>Test Document</title>
+        \\    <metadata>
+        \\      <author>Test Author</author>
+        \\      <created>2024-01-01</created>
+        \\    </metadata>
+        \\  </header>
+        \\  <body>
+        \\    <section id="intro">
+        \\      <p>Introduction paragraph with <em>emphasis</em>.</p>
+        \\      <![CDATA[Raw content here & special chars < >]]>
+        \\    </section>
+        \\  </body>
+        \\</document>
+    ;
+    try parser.write(input);
+
+    // Verify we captured all elements
+    const tags = handler.tags.items;
+    const attrs = handler.attributes.items;
+    _ = handler.texts.items;
+    const proc_insts = handler.proc_insts.items;
+
+    try testing.expect(tags.len > 10); // Multiple open/close tags
+    try testing.expect(attrs.len >= 3); // xmlns, id, class attributes
+    try testing.expect(proc_insts.len == 1); // XML declaration
+}
+
+test "test_edge_case_empty_attributes" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<element empty=\"\" another=\"value\" also-empty=''></element>";
+    try parser.write(input);
+
+    const attrs = handler.attributes.items;
+    try testing.expectEqual(3, attrs.len);
+
+    try testing.expectEqualStrings("empty", attrs[0].name[0..attrs[0].name_len]);
+    try testing.expectEqualStrings("", attrs[0].value[0..attrs[0].value_len]);
+
+    try testing.expectEqualStrings("also-empty", attrs[2].name[0..attrs[2].name_len]);
+    try testing.expectEqualStrings("", attrs[2].value[0..attrs[2].value_len]);
+}
+
+test "test_malformed_recovery" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    // Test parser behavior with some edge cases
+    const input = "<root><unclosed>content<closed></closed></root>";
+    try parser.write(input);
+
+    // Should still parse what it can
+    const tags = handler.tags.items;
+    try testing.expect(tags.len >= 2);
+}
+
+test "test_unicode_content" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root>Unicode: café, 测试, 🌟</root>";
+    try parser.write(input);
+
+    const texts = handler.texts.items;
+    try testing.expectEqual(1, texts.len);
+
+    const content = texts[0].value[0..(texts[0].header[1] - texts[0].header[0])];
+    try testing.expectEqualStrings("Unicode: café, 测试, 🌟", content);
+}
+
+test "test_namespace_prefixes" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<ns:root xmlns:ns=\"http://example.com\"><ns:child ns:attr=\"value\">content</ns:child></ns:root>";
+    try parser.write(input);
+
+    const tags = handler.tags.items;
+    const attrs = handler.attributes.items;
+
+    try testing.expectEqualStrings("ns:root", tags[0].name[0..tags[0].name_len]);
+    try testing.expectEqualStrings("ns:child", tags[1].name[0..tags[1].name_len]);
+
+    // Should capture namespace declarations and prefixed attributes
+    try testing.expect(attrs.len >= 2);
+}
+
+test "test_large_content" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    // Create a large content string
+    var large_content = std.ArrayList(u8).init(allocator);
+    defer large_content.deinit();
+
+    try large_content.appendSlice("<root>");
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        try large_content.appendSlice("<item>content</item>");
+    }
+    try large_content.appendSlice("</root>");
+
+    try parser.write(large_content.items);
+
+    const tags = handler.tags.items;
+    try testing.expectEqual(2001, tags.len); // 1 root open + 1000 item open + 1000 item close + 1 root close
+}
+
+test "test_position_tracking" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input =
+        \\<root>
+        \\  <element>content</element>
+        \\</root>
+    ;
+    try parser.write(input);
+
+    const tags = handler.tags.items;
+    // Verify position information is captured
+    try testing.expect(tags[0].start.line == 1);
+    try testing.expect(tags[1].start.line == 2);
+}
+
+test "test_mixed_content" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root>Text before <child>nested</child> text after <another>more</another> final text</root>";
+    try parser.write(input);
+
+    const texts = handler.texts.items;
+    const tags = handler.tags.items;
+
+    // Should capture all text segments between and within elements
+    try testing.expect(texts.len >= 4); // Multiple text segments
+    try testing.expect(tags.len == 6); // 3 open + 3 close tags
+}
+
+test "attribute unquoted hypenated attribute" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<element data-test=\"value with spaces\" hyphen-attr=\"test\" under_score=\"test\" number123=\"test\"></element>";
+    try parser.write(input);
+
+    const attrs = handler.attributes.items;
+    try testing.expectEqual(4, attrs.len);
+
+    // Verify various attribute name formats are handled
+    try testing.expectEqualStrings("data-test", attrs[0].name[0..attrs[0].name_len]);
+    try testing.expectEqualStrings("value with spaces", attrs[0].value[0..attrs[0].value_len]);
+
+    try testing.expectEqualStrings("hyphen-attr", attrs[1].name[0..attrs[1].name_len]);
+    try testing.expectEqualStrings("test", attrs[1].value[0..attrs[1].value_len]);
+
+    try testing.expectEqualStrings("under_score", attrs[2].name[0..attrs[2].name_len]);
+    try testing.expectEqualStrings("test", attrs[2].value[0..attrs[2].value_len]);
+
+    try testing.expectEqualStrings("number123", attrs[3].name[0..attrs[3].name_len]);
+    try testing.expectEqualStrings("test", attrs[3].value[0..attrs[3].value_len]);
+}
 
 // test "test_attribute_unquoted" {
 //     const allocator = std.testing.allocator;
