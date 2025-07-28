@@ -4,6 +4,48 @@ const Allocator = std.mem.Allocator;
 const WriteError = std.fs.File.WriteError;
 const RenderError = WriteError || error{OutOfMemory};
 
+pub fn newDoc(alloc: Allocator) *Node {
+  const node = alloc.create(Node);
+  node.document = Document.init(alloc);
+  return node;
+}
+
+pub fn newElem(alloc: Allocator, tagName: []const u8) *Node {
+  const node = alloc.create(Node);
+  node.element = Element.init(alloc, tagName);
+  return node;
+}
+
+pub fn newAttr(alloc: Allocator, name: []const u8, value: []const u8, parentElement: ?*Node) *Node {
+  const node = alloc.create(Node);
+  node.attribute = Attr.init(alloc, name, value, parentElement);
+  return node;
+}
+
+pub fn initComment(alloc: Allocator, content: []const u8, parent: ?*Node) *Node {
+  const node = alloc.create(Node);
+  node.text = Text.comment(content, parent);
+  return node;
+}
+
+pub fn initText(alloc: Allocator, content: []const u8, parent: ?*Node) *Node {
+  const node = alloc.create(Node);
+  node.text = Text.text(content, parent);
+  return node;
+}
+
+pub fn initProcInst(alloc: Allocator, content: []const u8, parent: ?*Node) *Node {
+  const node = alloc.create(Node);
+  node.text = Text.instruction(content, parent);
+  return node;
+}
+
+pub fn initCData(alloc: Allocator, content: []const u8, parent: ?*Node) *Node {
+  const node = alloc.create(Node);
+  node.text = Text.cdata(content, parent);
+  return node;
+}
+
 pub const NodeType = enum(u8) {
     element = 1,
     attribute = 2,
@@ -376,10 +418,10 @@ test "Element.init" {
 }
 
 test "Element.{set|get}Attribute" {
-    var elem = Node{ .element = @constCast(&Element.init(testing.allocator, "a")) };
-    const id = Node{ .attribute = @constCast(&Attr.init("id", "1", &elem)) };
+    var elem = newElem(testing.allocator, "a");
+    const id = newAttr(testing.allocator, "id", "1", &elem);
     try elem.element.setAttributeNode(&elem, @constCast(&id));
-    const class = Node{ .attribute = @constCast(&Attr.init("class", "a", &elem )) };
+    const class = newAttr(testing.allocator, "class", "a", &elem);
     try elem.element.setAttributeNode(&elem, @constCast(&class));
 
     try testing.expectEqualStrings("1", elem.element.getAttributeNode("id").?.attribute.value);
