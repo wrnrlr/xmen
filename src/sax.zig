@@ -125,7 +125,7 @@ pub const SaxParser = struct {
         self.buffer = input;
         self.pos = 0;
         var record_start: usize = 0;
-        var quote_char: ?u8 = null; // Track the opening quote type
+        var quote_char: ?u8 = null;
 
         while (self.pos < self.buffer.len) : (self.pos += 1) {
             const c = self.buffer[self.pos];
@@ -149,8 +149,8 @@ pub const SaxParser = struct {
                         }
                         self.tag_start_byte = self.pos;
                         self.state = if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '!') .IgnoreComment
-                                     else if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '?') .IgnoreInstruction
-                                     else .TagName;
+                                      else if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '?') .IgnoreInstruction
+                                      else .TagName;
                         self.end_tag = false;
                         self.self_closing = false;
                         record_start = self.pos + 1;
@@ -158,14 +158,7 @@ pub const SaxParser = struct {
                             std.mem.eql(u8, self.buffer[self.pos + 1 .. self.pos + 4], "!--"))
                         {
                             self.pos += 3;
-                            while (self.pos < self.buffer.len and
-                                (self.buffer[self.pos] == '-' or
-                                    self.buffer[self.pos] == ' ' or
-                                    self.buffer[self.pos] == '\t' or
-                                    self.buffer[self.pos] == '\n' or
-                                    self.buffer[self.pos] == '\r')) : (self.pos += 1)
-                            {}
-                            record_start = self.pos;
+                            record_start = self.pos + 1; // Start recording after <!--
                         } else if (self.state == .IgnoreInstruction and self.pos + 1 < self.buffer.len and
                             self.buffer[self.pos + 1] == '?')
                         {
@@ -192,9 +185,8 @@ pub const SaxParser = struct {
                     {
                         const comment_header = [_]usize{ record_start, self.pos };
                         const comment_value = self.buffer[comment_header[0]..comment_header[1]];
-                        const trimmed_comment = std.mem.trimRight(u8, comment_value, " \t\n\r");
                         const comment_entity = Text{
-                            .value = trimmed_comment.ptr,
+                            .value = comment_value.ptr,
                             .start = self.get_position(comment_header[0]),
                             .end = self.get_position(self.pos - 1),
                             .header = comment_header,
@@ -238,7 +230,7 @@ pub const SaxParser = struct {
                         if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '>') {
                             self.self_closing = true;
                             self.tag_name = self.buffer[record_start..self.pos];
-                            self.pos += 1; // Skip '/'
+                            self.pos += 1;
                             const tag_header = [_]usize{self.tag_start_byte, self.pos + 1};
                             const open_tag = Tag{
                                 .name = self.tag_name.ptr,
@@ -325,7 +317,6 @@ pub const SaxParser = struct {
                             };
                             const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
                             if (self.on_event != null) self.on_event.?(self.context, entity);
-                            // ... (self-closing logic unchanged)
                         }
                         self.attributes.clearRetainingCapacity();
                         self.state = .Text;
@@ -341,7 +332,6 @@ pub const SaxParser = struct {
                         self.state = .AttrEq;
                         record_start = self.pos + 1;
                     } else if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '>') {
-                        // Handle boolean attributes (e.g., disabled)
                         self.attr_name = self.buffer[record_start..self.pos];
                         if (self.attr_name.len > 0 and !std.mem.eql(u8, self.attr_name, "/")) {
                             self.attributes.append(.{
@@ -354,17 +344,14 @@ pub const SaxParser = struct {
                         self.state = .Tag;
                         record_start = self.pos + 1;
                         if (c == '>') {
-                            // Process the tag closing immediately
-                            self.pos -= 1; // Backtrack to let .Tag handle '>'
+                            self.pos -= 1;
                         }
                     } else if (c == '/') {
-                        // Check if this is part of a self-closing tag (e.g., />)
                         if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '>') {
                             self.self_closing = true;
                             self.state = .Tag;
                             record_start = self.pos + 1;
                         } else {
-                            // Treat as part of attribute name if not followed by '>'
                             self.attr_name = self.buffer[record_start..self.pos];
                             if (self.attr_name.len > 0 and !std.mem.eql(u8, self.attr_name, "/")) {
                                 self.attributes.append(.{
@@ -381,12 +368,11 @@ pub const SaxParser = struct {
                 },
                 .AttrEq => {
                     if (c == '"' or c == '\'') {
-                        quote_char = c; // Store the opening quote type
+                        quote_char = c;
                         self.state = .AttrQuot;
                         record_start = self.pos + 1;
                     }
                 },
-
                 .AttrQuot => {
                     if (c == quote_char) {
                         self.attr_value = self.buffer[record_start..self.pos];
@@ -398,7 +384,7 @@ pub const SaxParser = struct {
                         }) catch {};
                         self.state = .Tag;
                         record_start = self.pos + 1;
-                        quote_char = null; // Reset quote tracking
+                        quote_char = null;
                     }
                 },
                 .AttrValue => {},
@@ -483,23 +469,23 @@ pub const TestEventHandler = struct {
     }
 
     pub fn handle(self: *TestEventHandler, entity: Entity) void {
-            switch (entity.tag) {
-              .open_tag => {
-                    self.tags.append(entity.data.open_tag) catch {};
-                    if (entity.data.open_tag.attributes != null and entity.data.open_tag.attributes_len > 0) {
-                        const attrs_slice = entity.data.open_tag.attributes[0..entity.data.open_tag.attributes_len];
-                        for (attrs_slice) |attr| {
-                            self.attributes.append(attr) catch {};
-                        }
+        switch (entity.tag) {
+            .open_tag => {
+                self.tags.append(entity.data.open_tag) catch {};
+                if (entity.data.open_tag.attributes != null and entity.data.open_tag.attributes_len > 0) {
+                    const attrs_slice = entity.data.open_tag.attributes[0..entity.data.open_tag.attributes_len];
+                    for (attrs_slice) |attr| {
+                        self.attributes.append(attr) catch {};
                     }
-                },
-                .close_tag =>  self.tags.append(entity.data.open_tag) catch {},
-                .text => self.texts.append(entity.data.text) catch {},
-                .comment => self.texts.append(entity.data.comment) catch {},
-                .processing_instruction => self.proc_insts.append(entity.data.processing_instruction) catch {},
-                .cdata => self.texts.append(entity.data.cdata) catch {},
-            }
+                }
+            },
+            .close_tag => self.tags.append(entity.data.close_tag) catch {}, // Fixed to use .close_tag
+            .text => self.texts.append(entity.data.text) catch {},
+            .comment => self.texts.append(entity.data.comment) catch {},
+            .processing_instruction => self.proc_insts.append(entity.data.processing_instruction) catch {},
+            .cdata => self.texts.append(entity.data.cdata) catch {},
         }
+    }
 };
 
 test "test_attribute" {
@@ -521,8 +507,50 @@ test "test_attribute" {
     try testing.expectEqual(1, texts.len);
     try testing.expectEqualStrings(" ", texts[0].value[0..(texts[0].header[1] - texts[0].header[0])]);
 }
-// Additional comprehensive test cases for XML SAX parser
 
+test "test_comments" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root><!--Comment without whitespace--><element>content</element><!-- Comment with whitespace --></root>";
+    try parser.write(input);
+
+    const texts = handler.texts.items;
+    try testing.expectEqual(3, texts.len); // 2 comments + 1 text content
+
+    const first_comment = texts[0].value[0..(texts[0].header[1] - texts[0].header[0])];
+    try testing.expectEqualStrings("Comment without whitespace", first_comment);
+
+    const text_content = texts[1].value[0..(texts[1].header[1] - texts[1].header[0])];
+    try testing.expectEqualStrings("content", text_content);
+
+    const second_comment = texts[2].value[0..(texts[2].header[1] - texts[2].header[0])];
+    try testing.expectEqualStrings(" Comment with whitespace ", second_comment);
+}
+
+test "test_comment_with_whitespace" {
+    const allocator = std.testing.allocator;
+    var handler = TestEventHandler.init(allocator);
+    defer handler.deinit();
+
+    var parser = try setupParser(allocator, &handler);
+    defer parser.deinit();
+
+    const input = "<root><!-- This is a comment --></root>";
+    try parser.write(input);
+
+    const texts = handler.texts.items;
+    try testing.expectEqual(1, texts.len); // 1 comment
+
+    const comment_content = texts[0].value[0..(texts[0].header[1] - texts[0].header[0])];
+    try testing.expectEqualStrings(" This is a comment ", comment_content);
+}
+
+// Other test cases remain unchanged...
 test "test_nested_elements" {
     const allocator = std.testing.allocator;
     var handler = TestEventHandler.init(allocator);
@@ -537,7 +565,6 @@ test "test_nested_elements" {
     const tags = handler.tags.items;
     try testing.expectEqual(6, tags.len); // 3 open, 3 close
 
-    // Verify tag order and names
     try testing.expectEqualStrings("root", tags[0].name[0..tags[0].name_len]);
     try testing.expectEqualStrings("parent", tags[1].name[0..tags[1].name_len]);
     try testing.expectEqualStrings("child", tags[2].name[0..tags[2].name_len]);
@@ -661,21 +688,6 @@ test "test_multiple_cdata_sections" {
     try testing.expectEqual(2, texts.len);
 }
 
-test "test_comments" {
-    const allocator = std.testing.allocator;
-    var handler = TestEventHandler.init(allocator);
-    defer handler.deinit();
-
-    var parser = try setupParser(allocator, &handler);
-    defer parser.deinit();
-
-    const input = "<root><!-- This is a comment --><element>content</element><!-- Another comment --></root>";
-    try parser.write(input);
-
-    const texts = handler.texts.items;
-    try testing.expectEqual(3, texts.len); // 2 comments + 1 text content
-}
-
 test "test_processing_instructions" {
     const allocator = std.testing.allocator;
     var handler = TestEventHandler.init(allocator);
@@ -723,15 +735,14 @@ test "test_complex_nested_structure" {
     ;
     try parser.write(input);
 
-    // Verify we captured all elements
     const tags = handler.tags.items;
     const attrs = handler.attributes.items;
     _ = handler.texts.items;
     const proc_insts = handler.proc_insts.items;
 
-    try testing.expect(tags.len > 10); // Multiple open/close tags
-    try testing.expect(attrs.len >= 3); // xmlns, id, class attributes
-    try testing.expect(proc_insts.len == 1); // XML declaration
+    try testing.expect(tags.len > 10);
+    try testing.expect(attrs.len >= 3);
+    try testing.expect(proc_insts.len == 1);
 }
 
 test "test_edge_case_empty_attributes" {
@@ -763,11 +774,9 @@ test "test_malformed_recovery" {
     var parser = try setupParser(allocator, &handler);
     defer parser.deinit();
 
-    // Test parser behavior with some edge cases
     const input = "<root><unclosed>content<closed></closed></root>";
     try parser.write(input);
 
-    // Should still parse what it can
     const tags = handler.tags.items;
     try testing.expect(tags.len >= 2);
 }
@@ -807,7 +816,6 @@ test "test_namespace_prefixes" {
     try testing.expectEqualStrings("ns:root", tags[0].name[0..tags[0].name_len]);
     try testing.expectEqualStrings("ns:child", tags[1].name[0..tags[1].name_len]);
 
-    // Should capture namespace declarations and prefixed attributes
     try testing.expect(attrs.len >= 2);
 }
 
@@ -819,7 +827,6 @@ test "test_large_content" {
     var parser = try setupParser(allocator, &handler);
     defer parser.deinit();
 
-    // Create a large content string
     var large_content = std.ArrayList(u8).init(allocator);
     defer large_content.deinit();
 
@@ -833,7 +840,7 @@ test "test_large_content" {
     try parser.write(large_content.items);
 
     const tags = handler.tags.items;
-    try testing.expectEqual(2002, tags.len); // 1 root open + 1000 item open + 1000 item close + 1 root close
+    try testing.expectEqual(2002, tags.len);
 }
 
 test "test_position_tracking" {
@@ -852,7 +859,6 @@ test "test_position_tracking" {
     try parser.write(input);
 
     const tags = handler.tags.items;
-    // Verify position information is captured
     try testing.expect(tags[0].start.line == 1);
     try testing.expect(tags[1].start.line == 2);
 }
@@ -871,9 +877,8 @@ test "test_mixed_content" {
     const texts = handler.texts.items;
     const tags = handler.tags.items;
 
-    // Should capture all text segments between and within elements
-    try testing.expect(texts.len >= 4); // Multiple text segments
-    try testing.expect(tags.len == 6); // 3 open + 3 close tags
+    try testing.expect(texts.len >= 4);
+    try testing.expect(tags.len == 6);
 }
 
 test "attribute unquoted hypenated attribute" {
@@ -890,7 +895,6 @@ test "attribute unquoted hypenated attribute" {
     const attrs = handler.attributes.items;
     try testing.expectEqual(4, attrs.len);
 
-    // Verify various attribute name formats are handled
     try testing.expectEqualStrings("data-test", attrs[0].name[0..attrs[0].name_len]);
     try testing.expectEqualStrings("value with spaces", attrs[0].value[0..attrs[0].value_len]);
 
