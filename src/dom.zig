@@ -266,7 +266,7 @@ pub const Text = struct {
     fn render(self: Text, writer: anytype) RenderError!void {
         try switch (self.nodeType) {
           NodeType.cdata => self.render_cdata(writer),
-          NodeType.comment => self.render_cdata(writer),
+          NodeType.comment => self.render_comment(writer),
           NodeType.processing_instruction => self.render_instruction(writer),
           NodeType.text => self.render_text(writer),
           else => {}
