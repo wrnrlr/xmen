@@ -339,9 +339,43 @@ pub const SaxParser = struct {
                         self.attr_name = self.buffer[record_start..self.pos];
                         self.state = .AttrEq;
                         record_start = self.pos + 1;
-                    } else if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+                    } else if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '>') {
+                        // Handle boolean attributes (e.g., disabled)
+                        self.attr_name = self.buffer[record_start..self.pos];
+                        if (self.attr_name.len > 0 and !std.mem.eql(u8, self.attr_name, "/")) {
+                            self.attributes.append(.{
+                                .name = self.attr_name.ptr,
+                                .name_len = self.attr_name.len,
+                                .value = "",
+                                .value_len = 0,
+                            }) catch {};
+                        }
                         self.state = .Tag;
                         record_start = self.pos + 1;
+                        if (c == '>') {
+                            // Process the tag closing immediately
+                            self.pos -= 1; // Backtrack to let .Tag handle '>'
+                        }
+                    } else if (c == '/') {
+                        // Check if this is part of a self-closing tag (e.g., />)
+                        if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '>') {
+                            self.self_closing = true;
+                            self.state = .Tag;
+                            record_start = self.pos + 1;
+                        } else {
+                            // Treat as part of attribute name if not followed by '>'
+                            self.attr_name = self.buffer[record_start..self.pos];
+                            if (self.attr_name.len > 0 and !std.mem.eql(u8, self.attr_name, "/")) {
+                                self.attributes.append(.{
+                                    .name = self.attr_name.ptr,
+                                    .name_len = self.attr_name.len,
+                                    .value = "",
+                                    .value_len = 0,
+                                }) catch {};
+                            }
+                            self.state = .Tag;
+                            record_start = self.pos + 1;
+                        }
                     }
                 },
                 .AttrEq => {
@@ -448,11 +482,13 @@ pub const TestEventHandler = struct {
 
     pub fn handle(self: *TestEventHandler, entity: Entity) void {
             switch (entity.tag) {
-                .open_tag => {
+              .open_tag => {
+                    std.debug.print("Open tag: {s}, attributes_len: {}\n", .{entity.data.open_tag.name[0..entity.data.open_tag.name_len], entity.data.open_tag.attributes_len});
                     self.tags.append(entity.data.open_tag) catch {};
                     if (entity.data.open_tag.attributes != null and entity.data.open_tag.attributes_len > 0) {
                         const attrs_slice = entity.data.open_tag.attributes[0..entity.data.open_tag.attributes_len];
-                        for (attrs_slice) |attr| {
+                        for (attrs_slice, 0..) |attr, i| {
+                            std.debug.print("Attribute {}: name={s}, value={s}\n", .{i, attr.name[0..attr.name_len], attr.value[0..attr.value_len]});
                             self.attributes.append(attr) catch {};
                         }
                     }
