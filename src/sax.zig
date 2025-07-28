@@ -20,7 +20,7 @@ pub const Attr = extern struct {
     value_len: usize,
 };
 
-pub const OpenTag = extern struct {
+pub const Tag = extern struct {
     name: [*c]const u8,
     name_len: usize,
     attributes: [*c]Attr,
@@ -42,8 +42,8 @@ pub const EntityType = enum(c_int) {
 pub const Entity = extern struct {
     tag: EntityType,
     data: extern union {
-        open_tag: OpenTag,
-        close_tag: OpenTag,
+        open_tag: Tag,
+        close_tag: Tag,
         text: Text,
         comment: Text,
         processing_instruction: Text,
@@ -125,6 +125,7 @@ pub const SaxParser = struct {
         self.buffer = input;
         self.pos = 0;
         var record_start: usize = 0;
+        var quote_char: ?u8 = null; // Track the opening quote type
 
         while (self.pos < self.buffer.len) : (self.pos += 1) {
             const c = self.buffer[self.pos];
@@ -135,13 +136,11 @@ pub const SaxParser = struct {
                         if (self.pos > record_start) {
                             const text_header = [_]usize{ record_start, self.pos };
                             const text_value = self.buffer[text_header[0]..text_header[1]];
-                            const start_pos = self.get_position(text_header[0]);
-                            const end_pos = self.get_position(self.pos - 1);
                             const text_entity = Text{
                                 .value = text_value.ptr,
-                                .start = start_pos,
-                                .end = end_pos,
                                 .header = text_header,
+                                .start = self.get_position(text_header[0]),
+                                .end = self.get_position(self.pos - 1),
                             };
                             const entity = Entity{ .tag = .text, .data = .{ .text = text_entity } };
                             if (self.on_event != null) {
@@ -194,12 +193,10 @@ pub const SaxParser = struct {
                         const comment_header = [_]usize{ record_start, self.pos };
                         const comment_value = self.buffer[comment_header[0]..comment_header[1]];
                         const trimmed_comment = std.mem.trimRight(u8, comment_value, " \t\n\r");
-                        const start_pos = self.get_position(comment_header[0]);
-                        const end_pos = self.get_position(self.pos - 1);
                         const comment_entity = Text{
                             .value = trimmed_comment.ptr,
-                            .start = start_pos,
-                            .end = end_pos,
+                            .start = self.get_position(comment_header[0]),
+                            .end = self.get_position(self.pos - 1),
                             .header = comment_header,
                         };
                         const entity = Entity{ .tag = .comment, .data = .{ .comment = comment_entity } };
@@ -217,12 +214,10 @@ pub const SaxParser = struct {
                     {
                         const pi_header = [_]usize{ record_start, self.pos };
                         const pi_value = self.buffer[pi_header[0]..pi_header[1]];
-                        const start_pos = self.get_position(pi_header[0]);
-                        const end_pos = self.get_position(self.pos - 1);
                         const pi_entity = Text{
                             .value = pi_value.ptr,
-                            .start = start_pos,
-                            .end = end_pos,
+                            .start = self.get_position(pi_header[0]),
+                            .end = self.get_position(self.pos - 1),
                             .header = pi_header,
                         };
                         const entity = Entity{ .tag = .processing_instruction, .data = .{ .processing_instruction = pi_entity } };
@@ -240,20 +235,41 @@ pub const SaxParser = struct {
                         self.state = .Tag;
                         record_start = self.pos + 1;
                     } else if (c == '/') {
-                        self.self_closing = true;
+                        if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '>') {
+                            self.self_closing = true;
+                            self.tag_name = self.buffer[record_start..self.pos];
+                            self.pos += 1; // Skip '/'
+                            const tag_header = [_]usize{self.tag_start_byte, self.pos + 1};
+                            const open_tag = Tag{
+                                .name = self.tag_name.ptr,
+                                .name_len = self.tag_name.len,
+                                .attributes = if (self.attributes.items.len > 0) self.attributes.items.ptr else null,
+                                .attributes_len = self.attributes.items.len,
+                                .start = self.get_position(self.tag_start_byte),
+                                .end = self.get_position(self.pos),
+                                .header = tag_header,
+                            };
+                            const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
+                            if (self.on_event != null) {
+                                self.on_event.?(self.context, entity);
+                            }
+                            self.attributes.clearRetainingCapacity();
+                            self.state = .Text;
+                            record_start = self.pos + 1;
+                        }
                     } else if (c == '>') {
                         self.tag_name = self.buffer[record_start..self.pos];
                         const tag_header = [_]usize{self.tag_start_byte, self.pos + 1};
-                        const start_pos = self.get_position(self.tag_start_byte);
-                        const end_pos = self.get_position(self.pos);
+                        const start = self.get_position(self.tag_start_byte);
+                        const end = self.get_position(self.pos);
                         if (self.end_tag) {
-                            const close_tag = OpenTag{
+                            const close_tag = Tag{
                                 .name = self.tag_name.ptr,
                                 .name_len = self.tag_name.len,
                                 .attributes = null,
                                 .attributes_len = 0,
-                                .start = start_pos,
-                                .end = end_pos,
+                                .start = start,
+                                .end = end,
                                 .header = tag_header,
                             };
                             const entity = Entity{ .tag = .close_tag, .data = .{ .close_tag = close_tag } };
@@ -261,33 +277,18 @@ pub const SaxParser = struct {
                                 self.on_event.?(self.context, entity);
                             }
                         } else {
-                            const open_tag = OpenTag{
+                            const open_tag = Tag{
                                 .name = self.tag_name.ptr,
                                 .name_len = self.tag_name.len,
-                                .attributes = self.attributes.items.ptr,
+                                .attributes = if (self.attributes.items.len > 0) self.attributes.items.ptr else null,
                                 .attributes_len = self.attributes.items.len,
-                                .start = start_pos,
-                                .end = end_pos,
+                                .start = start,
+                                .end = end,
                                 .header = tag_header,
                             };
                             const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
                             if (self.on_event != null) {
                                 self.on_event.?(self.context, entity);
-                            }
-                            if (self.self_closing) {
-                                const close_tag = OpenTag{
-                                    .name = self.tag_name.ptr,
-                                    .name_len = self.tag_name.len,
-                                    .attributes = null,
-                                    .attributes_len = 0,
-                                    .start = start_pos,
-                                    .end = end_pos,
-                                    .header = tag_header,
-                                };
-                                const entity2 = Entity{ .tag = .close_tag, .data = .{ .close_tag = close_tag } };
-                                if (self.on_event != null) {
-                                    self.on_event.?(self.context, entity2);
-                                }
                             }
                         }
                         self.attributes.clearRetainingCapacity();
@@ -298,28 +299,28 @@ pub const SaxParser = struct {
                 .Tag => {
                     if (c == '>') {
                         const tag_header = [_]usize{ self.tag_start_byte, self.pos + 1 };
-                        const start_pos = self.get_position(self.tag_start_byte);
-                        const end_pos = self.get_position(self.pos);
+                        const start = self.get_position(self.tag_start_byte);
+                        const end = self.get_position(self.pos);
                         if (self.end_tag) {
-                            const close_tag = OpenTag{
+                            const close_tag = Tag{
                                 .name = self.tag_name.ptr,
                                 .name_len = self.tag_name.len,
                                 .attributes = null,
                                 .attributes_len = 0,
-                                .start = start_pos,
-                                .end = end_pos,
+                                .start = start,
+                                .end = end,
                                 .header = tag_header,
                             };
                             const entity = Entity{ .tag = .close_tag, .data = .{ .close_tag = close_tag } };
                             if (self.on_event != null) self.on_event.?(self.context, entity);
                         } else {
-                            const open_tag = OpenTag{
+                            const open_tag = Tag{
                                 .name = self.tag_name.ptr,
                                 .name_len = self.tag_name.len,
                                 .attributes = if (self.attributes.items.len > 0) self.attributes.items.ptr else null,
                                 .attributes_len = self.attributes.items.len,
-                                .start = start_pos,
-                                .end = end_pos,
+                                .start = start,
+                                .end = end,
                                 .header = tag_header,
                             };
                             const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
@@ -380,12 +381,14 @@ pub const SaxParser = struct {
                 },
                 .AttrEq => {
                     if (c == '"' or c == '\'') {
+                        quote_char = c; // Store the opening quote type
                         self.state = .AttrQuot;
                         record_start = self.pos + 1;
                     }
                 },
+
                 .AttrQuot => {
-                    if (c == '"' or c == '\'') {
+                    if (c == quote_char) {
                         self.attr_value = self.buffer[record_start..self.pos];
                         self.attributes.append(.{
                             .name = self.attr_name.ptr,
@@ -395,6 +398,7 @@ pub const SaxParser = struct {
                         }) catch {};
                         self.state = .Tag;
                         record_start = self.pos + 1;
+                        quote_char = null; // Reset quote tracking
                     }
                 },
                 .AttrValue => {},
@@ -404,12 +408,10 @@ pub const SaxParser = struct {
                     {
                         const cdata_header = [_]usize{ record_start, self.pos };
                         const cdata_value = self.buffer[cdata_header[0]..cdata_header[1]];
-                        const start_pos = self.get_position(cdata_header[0]);
-                        const end_pos = self.get_position(self.pos - 1);
                         const cdata_entity = Text{
                             .value = cdata_value.ptr,
-                            .start = start_pos,
-                            .end = end_pos,
+                            .start = self.get_position(cdata_header[0]),
+                            .end = self.get_position(self.pos - 1),
                             .header = cdata_header,
                         };
                         const entity = Entity{ .tag = .cdata, .data = .{ .cdata = cdata_entity } };
@@ -460,7 +462,7 @@ pub const TestEventHandler = struct {
     allocator: Allocator,
     attributes: std.ArrayList(Attr),
     texts: std.ArrayList(Text),
-    tags: std.ArrayList(OpenTag),
+    tags: std.ArrayList(Tag),
     proc_insts: std.ArrayList(Text),
 
     pub fn init(allocator: Allocator) TestEventHandler {
@@ -468,7 +470,7 @@ pub const TestEventHandler = struct {
             .allocator = allocator,
             .attributes = std.ArrayList(Attr).init(allocator),
             .texts = std.ArrayList(Text).init(allocator),
-            .tags = std.ArrayList(OpenTag).init(allocator),
+            .tags = std.ArrayList(Tag).init(allocator),
             .proc_insts = std.ArrayList(Text).init(allocator),
         };
     }
@@ -483,19 +485,15 @@ pub const TestEventHandler = struct {
     pub fn handle(self: *TestEventHandler, entity: Entity) void {
             switch (entity.tag) {
               .open_tag => {
-                    // std.debug.print("Open tag: {s}, attributes_len: {}\n", .{entity.data.open_tag.name[0..entity.data.open_tag.name_len], entity.data.open_tag.attributes_len});
                     self.tags.append(entity.data.open_tag) catch {};
                     if (entity.data.open_tag.attributes != null and entity.data.open_tag.attributes_len > 0) {
                         const attrs_slice = entity.data.open_tag.attributes[0..entity.data.open_tag.attributes_len];
-                        for (attrs_slice, 0..) |attr, i| {
-                            std.debug.print("Attribute {}: name={s}, value={s}\n", .{i, attr.name[0..attr.name_len], attr.value[0..attr.value_len]});
+                        for (attrs_slice) |attr| {
                             self.attributes.append(attr) catch {};
                         }
                     }
                 },
-                .close_tag => {
-                    self.tags.append(entity.data.open_tag) catch {};
-                },
+                .close_tag =>  self.tags.append(entity.data.open_tag) catch {},
                 .text => self.texts.append(entity.data.text) catch {},
                 .comment => self.texts.append(entity.data.comment) catch {},
                 .processing_instruction => self.proc_insts.append(entity.data.processing_instruction) catch {},
@@ -835,7 +833,7 @@ test "test_large_content" {
     try parser.write(large_content.items);
 
     const tags = handler.tags.items;
-    try testing.expectEqual(2001, tags.len); // 1 root open + 1000 item open + 1000 item close + 1 root close
+    try testing.expectEqual(2002, tags.len); // 1 root open + 1000 item open + 1000 item close + 1 root close
 }
 
 test "test_position_tracking" {
