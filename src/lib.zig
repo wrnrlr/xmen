@@ -3,6 +3,7 @@ const dom = @import("./dom.zig");
 const sax = @import("./sax.zig");
 const xpath = @import("./xpath.zig");
 const eval = @import("./eval.zig");
+const parse = @import("./parse.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -20,6 +21,8 @@ pub const XPathParser = xpath.XPathParser;
 pub const XPathEvaluator = eval.XPathEvaluator;
 pub const XPathResult = eval.XPathResult;
 pub const XPathError = eval.XPathError;
+
+pub const DOMParser = parse.DomParser;
 
 test "lib" {
 
