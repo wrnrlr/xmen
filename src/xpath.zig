@@ -5,9 +5,9 @@ const Allocator = std.mem.Allocator;
 const TokenType = enum { Slash, Identifier, At, Equals, StringLiteral, LBracket, RBracket, EOF };
 const Token = struct { type: TokenType, value: []const u8 };
 
-const NodeType = enum { Element, Predicate };
+pub const AstNodeType = enum { Element, Predicate };
 pub const AstNode = struct {
-    type: NodeType,
+    type: AstNodeType,
     name: ?[]const u8 = null,
     predicate: ?*AstNode = null,
     children: std.ArrayList(*AstNode),
@@ -281,10 +281,10 @@ test "Parser: simple path" {
         allocator.destroy(ast);
     }
 
-    try testing.expectEqual(NodeType.Element, ast.type);
+    try testing.expectEqual(AstNodeType.Element, ast.type);
     try testing.expectEqualStrings("root", ast.name orelse "");
     try testing.expectEqual(@as(usize, 1), ast.children.items.len);
-    try testing.expectEqual(NodeType.Element, ast.children.items[0].type);
+    try testing.expectEqual(AstNodeType.Element, ast.children.items[0].type);
     try testing.expectEqualStrings("child", ast.children.items[0].name orelse "");
 }
 
@@ -298,17 +298,17 @@ test "Parser: path with predicate" {
         allocator.destroy(ast);
     }
 
-    try testing.expectEqual(NodeType.Element, ast.type);
+    try testing.expectEqual(AstNodeType.Element, ast.type);
     try testing.expectEqualStrings("root", ast.name orelse "");
     try testing.expectEqual(@as(usize, 1), ast.children.items.len);
 
     const child = ast.children.items[0];
-    try testing.expectEqual(NodeType.Element, child.type);
+    try testing.expectEqual(AstNodeType.Element, child.type);
     try testing.expectEqualStrings("child", child.name orelse "");
     try testing.expect(child.predicate != null);
 
     const pred = child.predicate.?;
-    try testing.expectEqual(NodeType.Predicate, pred.type);
+    try testing.expectEqual(AstNodeType.Predicate, pred.type);
     try testing.expectEqualStrings("attr", pred.attribute orelse "");
     try testing.expectEqualStrings("value", pred.value orelse "");
 }
@@ -323,23 +323,23 @@ test "Parser: complex path" {
         allocator.destroy(ast);
     }
 
-    try testing.expectEqual(NodeType.Element, ast.type);
+    try testing.expectEqual(AstNodeType.Element, ast.type);
     try testing.expectEqualStrings("root", ast.name orelse "");
     try testing.expectEqual(@as(usize, 1), ast.children.items.len);
 
     const child = ast.children.items[0];
-    try testing.expectEqual(NodeType.Element, child.type);
+    try testing.expectEqual(AstNodeType.Element, child.type);
     try testing.expectEqualStrings("child", child.name orelse "");
     try testing.expect(child.predicate != null);
 
     const pred = child.predicate.?;
-    try testing.expectEqual(NodeType.Predicate, pred.type);
+    try testing.expectEqual(AstNodeType.Predicate, pred.type);
     try testing.expectEqualStrings("attr", pred.attribute orelse "");
     try testing.expectEqualStrings("value", pred.value orelse "");
 
     try testing.expectEqual(@as(usize, 1), child.children.items.len);
     const grandchild = child.children.items[0];
-    try testing.expectEqual(NodeType.Element, grandchild.type);
+    try testing.expectEqual(AstNodeType.Element, grandchild.type);
     try testing.expectEqualStrings("grandchild", grandchild.name orelse "");
 }
 
