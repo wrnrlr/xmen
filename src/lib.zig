@@ -20,3 +20,7 @@ pub const XPathParser = xpath.XPathParser;
 pub const XPathEvaluator = eval.XPathEvaluator;
 pub const XPathResult = eval.XPathResult;
 pub const XPathError = eval.XPathError;
+
+test "lib" {
+
+}
