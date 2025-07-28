@@ -1,36 +1,54 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const SaxEventType = enum(c_int) {
-  Open = 0,
-  Close = 1,
-  Text = 2,
-  Comment = 3,
-  ProcessingInstruction = 4,
-  Cdata = 5,
+pub const Position = struct {
+    line: u64,
+    char: u64,
 };
 
-// SaxEvent as an extern struct
-pub const SaxEvent = extern struct {
-    type: SaxEventType,
-    name: Slice,
-    attributes: SliceAttributes,
-
-    pub const Slice = extern struct {
-        ptr: [*]const u8,
-        len: usize,
-    };
-
-    pub const SliceAttributes = extern struct {
-        ptr: ?[*]const Attribute, // Changed to optional pointer
-        len: usize,
-    };
+pub const Text = struct {
+    value: []const u8,
+    start: Position,
+    end: Position,
+    header: [2]usize,
 };
 
-// Attribute must be extern for C compatibility
-pub const Attribute = extern struct {
-    name: SaxEvent.Slice,
-    value: SaxEvent.Slice,
+pub const Attr = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+pub const OpenTag = struct {
+    name: []const u8,
+    attributes: []Attr,
+    start: Position,
+    end: Position,
+    header: [2]usize,
+};
+
+pub const CloseTag = struct {
+    name: []const u8,
+    start: Position,
+    end: Position,
+    header: [2]usize,
+};
+
+pub const EntityType = enum {
+    open_tag,
+    close_tag,
+    text,
+    comment,
+    processing_instruction,
+    cdata,
+};
+
+pub const Entity = union(EntityType) {
+    open_tag: OpenTag,
+    close_tag: CloseTag,
+    text: Text,
+    comment: Text,
+    processing_instruction: Text,
+    cdata: Text,
 };
 
 const State = enum {
@@ -57,11 +75,12 @@ pub const SaxParser = struct {
     self_closing: bool,
     attr_name: []const u8,
     attr_value: []const u8,
-    attributes: std.ArrayList(Attribute),
+    attributes: std.ArrayList(Attr),
     context: ?*anyopaque,
-    on_event: ?*const fn (?*anyopaque, SaxEvent) callconv(.C) void,
+    on_event: ?*const fn (?*anyopaque, EntityType, Entity) callconv(.C) void,
+    tag_start_byte: usize,
 
-    pub fn init(allocator: Allocator, context: ?*anyopaque, callback: ?*const fn (?*anyopaque, SaxEvent) callconv(.C) void) !SaxParser {
+    pub fn init(allocator: Allocator, context: ?*anyopaque, callback: ?*const fn (?*anyopaque, EntityType, Entity) callconv(.C) void) !SaxParser {
         return SaxParser{
             .allocator = allocator,
             .buffer = &.{},
@@ -72,14 +91,34 @@ pub const SaxParser = struct {
             .self_closing = false,
             .attr_name = "",
             .attr_value = "",
-            .attributes = std.ArrayList(Attribute).init(allocator),
+            .attributes = std.ArrayList(Attr).init(allocator),
             .context = context,
             .on_event = callback,
+            .tag_start_byte = 0,
         };
     }
 
     pub fn deinit(self: *SaxParser) void {
         self.attributes.deinit();
+    }
+
+    fn get_position(self: *SaxParser, byte_pos: usize) Position {
+        var line: u64 = 1;
+        var char: u64 = 1;
+        var pos: usize = 0;
+        while (pos < byte_pos and pos < self.buffer.len) {
+            const byte = self.buffer[pos];
+            if (byte < 0x80 or byte >= 0xC0) {
+                if (byte == '\n') {
+                    line += 1;
+                    char = 1;
+                } else {
+                    char += 1;
+                }
+            }
+            pos += 1;
+        }
+        return Position{ .line = line, .char = char };
     }
 
     pub fn write(self: *SaxParser, input: []const u8) void {
@@ -94,25 +133,32 @@ pub const SaxParser = struct {
                 .Text => {
                     if (c == '<') {
                         if (self.pos > record_start) {
-                            const text = self.buffer[record_start..self.pos];
-                            const event = SaxEvent{
-                                .type = .Text,
-                                .name = .{ .ptr = text.ptr, .len = text.len },
-                                .attributes = .{ .ptr = null, .len = 0 },
+                            const text_header = [_]usize{ record_start, self.pos };
+                            const text_value = self.buffer[text_header[0]..text_header[1]];
+                            const start_pos = self.get_position(text_header[0]);
+                            const end_pos = self.get_position(self.pos - 1);
+                            const text_entity = Text{
+                                .value = text_value,
+                                .start = start_pos,
+                                .end = end_pos,
+                                .header = text_header,
                             };
+                            const entity = Entity{ .text = text_entity };
                             if (self.on_event != null) {
-                                self.on_event.?(self.context, event);
+                                self.on_event.?(self.context, .text, entity);
                             }
                         }
-                        self.state = if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '!') .IgnoreComment else if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '?') .IgnoreInstruction else .TagName;
+                        self.tag_start_byte = self.pos;
+                        self.state = if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '!') .IgnoreComment
+                                     else if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '?') .IgnoreInstruction
+                                     else .TagName;
                         self.end_tag = false;
                         self.self_closing = false;
                         record_start = self.pos + 1;
                         if (self.state == .IgnoreComment and self.pos + 3 < self.buffer.len and
                             std.mem.eql(u8, self.buffer[self.pos + 1 .. self.pos + 4], "!--"))
                         {
-                            self.pos += 3; // Skip past <!--
-                            // Skip leading hyphens and whitespace
+                            self.pos += 3;
                             while (self.pos < self.buffer.len and
                                 (self.buffer[self.pos] == '-' or
                                     self.buffer[self.pos] == ' ' or
@@ -120,11 +166,7 @@ pub const SaxParser = struct {
                                     self.buffer[self.pos] == '\n' or
                                     self.buffer[self.pos] == '\r')) : (self.pos += 1)
                             {}
-                            if (self.pos < self.buffer.len) {
-                                record_start = self.pos; // Start at first non-hyphen, non-whitespace character
-                            } else {
-                                record_start = self.pos; // Handle empty comment case
-                            }
+                            record_start = self.pos;
                         } else if (self.state == .IgnoreInstruction and self.pos + 1 < self.buffer.len and
                             self.buffer[self.pos + 1] == '?')
                         {
@@ -140,8 +182,8 @@ pub const SaxParser = struct {
                             std.mem.eql(u8, self.buffer[self.pos + 1 .. self.pos + 9], "![CDATA["))
                         {
                             self.state = .Cdata;
-                            self.pos += 8; // Skip past <![CDATA[
-                            record_start = self.pos + 1; // Start at the first character of actual CDATA content
+                            self.pos += 8;
+                            record_start = self.pos + 1;
                         }
                     }
                 },
@@ -149,16 +191,20 @@ pub const SaxParser = struct {
                     if (self.pos + 2 < self.buffer.len and
                         std.mem.eql(u8, self.buffer[self.pos .. self.pos + 3], "-->"))
                     {
-                        const comment = self.buffer[record_start..self.pos];
-                        // Trim trailing whitespace
-                        const trimmed_comment = std.mem.trimRight(u8, comment, " \t\n\r");
-                        const event = SaxEvent{
-                            .type = .Comment,
-                            .name = .{ .ptr = trimmed_comment.ptr, .len = trimmed_comment.len },
-                            .attributes = .{ .ptr = null, .len = 0 },
+                        const comment_header = [_]usize{ record_start, self.pos };
+                        const comment_value = self.buffer[comment_header[0]..comment_header[1]];
+                        const trimmed_comment = std.mem.trimRight(u8, comment_value, " \t\n\r");
+                        const start_pos = self.get_position(comment_header[0]);
+                        const end_pos = self.get_position(self.pos - 1);
+                        const comment_entity = Text{
+                            .value = trimmed_comment,
+                            .start = start_pos,
+                            .end = end_pos,
+                            .header = comment_header,
                         };
+                        const entity = Entity{ .comment = comment_entity };
                         if (self.on_event != null) {
-                            self.on_event.?(self.context, event);
+                            self.on_event.?(self.context, .comment, entity);
                         }
                         self.pos += 2;
                         self.state = .Text;
@@ -169,14 +215,19 @@ pub const SaxParser = struct {
                     if (self.pos + 1 < self.buffer.len and
                         std.mem.eql(u8, self.buffer[self.pos .. self.pos + 2], "?>"))
                     {
-                        const pi = self.buffer[record_start..self.pos];
-                        const event = SaxEvent{
-                            .type = .ProcessingInstruction,
-                            .name = .{ .ptr = pi.ptr, .len = pi.len },
-                            .attributes = .{ .ptr = null, .len = 0 },
+                        const pi_header = [_]usize{ record_start, self.pos };
+                        const pi_value = self.buffer[pi_header[0]..pi_header[1]];
+                        const start_pos = self.get_position(pi_header[0]);
+                        const end_pos = self.get_position(self.pos - 1);
+                        const pi_entity = Text{
+                            .value = pi_value,
+                            .start = start_pos,
+                            .end = end_pos,
+                            .header = pi_header,
                         };
+                        const entity = Entity{ .processing_instruction = pi_entity };
                         if (self.on_event != null) {
-                            self.on_event.?(self.context, event);
+                            self.on_event.?(self.context, .processing_instruction, entity);
                         }
                         self.pos += 1;
                         self.state = .Text;
@@ -192,32 +243,42 @@ pub const SaxParser = struct {
                         self.self_closing = true;
                     } else if (c == '>') {
                         self.tag_name = self.buffer[record_start..self.pos];
+                        const tag_header = [_]usize{self.tag_start_byte, self.pos + 1};
+                        const start_pos = self.get_position(self.tag_start_byte);
+                        const end_pos = self.get_position(self.pos);
                         if (self.end_tag) {
-                            const event = SaxEvent{
-                                .type = .Close,
-                                .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
-                                .attributes = .{ .ptr = null, .len = 0 },
+                            const close_tag = CloseTag{
+                                .name = self.tag_name,
+                                .start = start_pos,
+                                .end = end_pos,
+                                .header = tag_header,
                             };
+                            const entity = Entity{ .close_tag = close_tag };
                             if (self.on_event != null) {
-                                self.on_event.?(self.context, event);
+                                self.on_event.?(self.context, .close_tag, entity);
                             }
                         } else {
-                            const event = SaxEvent{
-                                .type = .Open,
-                                .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
-                                .attributes = .{ .ptr = self.attributes.items.ptr, .len = self.attributes.items.len },
+                            const open_tag = OpenTag{
+                                .name = self.tag_name,
+                                .attributes = self.attributes.items,
+                                .start = start_pos,
+                                .end = end_pos,
+                                .header = tag_header,
                             };
+                            const entity = Entity{ .open_tag = open_tag };
                             if (self.on_event != null) {
-                                self.on_event.?(self.context, event);
+                                self.on_event.?(self.context, .open_tag, entity);
                             }
                             if (self.self_closing) {
-                                const close_event = SaxEvent{
-                                    .type = .Close,
-                                    .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
-                                    .attributes = .{ .ptr = null, .len = 0 },
+                                const close_tag = CloseTag{
+                                    .name = self.tag_name,
+                                    .start = start_pos,
+                                    .end = end_pos,
+                                    .header = tag_header,
                                 };
+                                const entity2 = Entity{ .close_tag = close_tag };
                                 if (self.on_event != null) {
-                                    self.on_event.?(self.context, close_event);
+                                    self.on_event.?(self.context, .close_tag, entity2);
                                 }
                             }
                         }
@@ -231,32 +292,42 @@ pub const SaxParser = struct {
                         self.self_closing = true;
                         record_start = self.pos + 1;
                     } else if (c == '>') {
+                        const tag_header = [_]usize{ self.tag_start_byte, self.pos + 1 };
+                        const start_pos = self.get_position(self.tag_start_byte);
+                        const end_pos = self.get_position(self.pos);
                         if (self.end_tag) {
-                            const event = SaxEvent{
-                                .type = .Close,
-                                .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
-                                .attributes = .{ .ptr = null, .len = 0 },
+                            const close_tag = CloseTag{
+                                .name = self.tag_name,
+                                .start = start_pos,
+                                .end = end_pos,
+                                .header = tag_header,
                             };
+                            const entity = Entity{ .close_tag = close_tag };
                             if (self.on_event != null) {
-                                self.on_event.?(self.context, event);
+                                self.on_event.?(self.context, .close_tag, entity);
                             }
                         } else {
-                            const event = SaxEvent{
-                                .type = .Open,
-                                .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
-                                .attributes = .{ .ptr = self.attributes.items.ptr, .len = self.attributes.items.len },
+                            const open_tag = OpenTag{
+                                .name = self.tag_name,
+                                .attributes = self.attributes.items,
+                                .start = start_pos,
+                                .end = end_pos,
+                                .header = tag_header,
                             };
+                            const entity = Entity{ .open_tag = open_tag };
                             if (self.on_event != null) {
-                                self.on_event.?(self.context, event);
+                                self.on_event.?(self.context, .open_tag, entity);
                             }
                             if (self.self_closing) {
-                                const close_event = SaxEvent{
-                                    .type = .Close,
-                                    .name = .{ .ptr = self.tag_name.ptr, .len = self.tag_name.len },
-                                    .attributes = .{ .ptr = null, .len = 0 },
+                                const close_tag = CloseTag{
+                                    .name = self.tag_name,
+                                    .start = start_pos,
+                                    .end = end_pos,
+                                    .header = tag_header,
                                 };
+                                const entity2 = Entity{ .close_tag = close_tag };
                                 if (self.on_event != null) {
-                                    self.on_event.?(self.context, close_event);
+                                    self.on_event.?(self.context, .close_tag, entity2 );
                                 }
                             }
                         }
@@ -287,9 +358,7 @@ pub const SaxParser = struct {
                 .AttrQuot => {
                     if (c == '"' or c == '\'') {
                         self.attr_value = self.buffer[record_start..self.pos];
-                        self.attributes.append(.{ .name = .{ .ptr = self.attr_name.ptr, .len = self.attr_name.len }, .value = .{ .ptr = self.attr_value.ptr, .len = self.attr_value.len } }) catch {
-                            std.debug.print("Failed to append attribute: {s}={s}\n", .{ self.attr_name, self.attr_value });
-                        };
+                        self.attributes.append(.{ .name = self.attr_name, .value = self.attr_value }) catch {};
                         self.state = .Tag;
                         record_start = self.pos + 1;
                     }
@@ -299,14 +368,19 @@ pub const SaxParser = struct {
                     if (self.pos + 2 < self.buffer.len and
                         std.mem.eql(u8, self.buffer[self.pos .. self.pos + 3], "]]>"))
                     {
-                        const cdata = self.buffer[record_start..self.pos];
-                        const event = SaxEvent{
-                            .type = .Cdata,
-                            .name = .{ .ptr = cdata.ptr, .len = cdata.len },
-                            .attributes = .{ .ptr = null, .len = 0 },
+                        const cdata_header = [_]usize{ record_start, self.pos };
+                        const cdata_value = self.buffer[cdata_header[0]..cdata_header[1]];
+                        const start_pos = self.get_position(cdata_header[0]);
+                        const end_pos = self.get_position(self.pos - 1);
+                        const cdata_entity = Text{
+                            .value = cdata_value,
+                            .start = start_pos,
+                            .end = end_pos,
+                            .header = cdata_header,
                         };
+                        const entity = Entity{ .cdata = cdata_entity };
                         if (self.on_event != null) {
-                            self.on_event.?(self.context, event);
+                            self.on_event.?(self.context, .cdata, entity);
                         }
                         self.pos += 2;
                         self.state = .Text;
@@ -318,140 +392,3 @@ pub const SaxParser = struct {
         }
     }
 };
-
-// Example FFI interface for Bun
-pub export fn create_parser(allocator: *std.mem.Allocator, context: ?*anyopaque, callback: ?*const fn (?*anyopaque, SaxEvent) callconv(.C) void) ?*SaxParser {
-    const parser = allocator.create(SaxParser) catch return null;
-    parser.* = SaxParser.init(allocator.*, context, callback) catch return null;
-    return parser;
-}
-
-pub export fn destroy_parser(parser: *SaxParser) void {
-    parser.deinit();
-    parser.allocator.destroy(parser);
-}
-
-pub export fn parse(parser: *SaxParser, input: [*]const u8, len: usize) void {
-    parser.write(input[0..len]);
-}
-
-// Testing
-
-const testing = std.testing;
-
-const EventCapture = struct {
-    events: std.ArrayList(SaxEvent),
-
-    fn init(allocator: Allocator) EventCapture {
-        return .{ .events = std.ArrayList(SaxEvent).init(allocator) };
-    }
-
-    fn deinit(self: *EventCapture) void {
-        // Free attributes for each event
-        for (self.events.items) |event| {
-            if (event.attributes.len > 0 and event.attributes.ptr != null) {
-                self.events.allocator.free(event.attributes.ptr.?[0..event.attributes.len]);
-            }
-        }
-        self.events.deinit();
-    }
-
-    fn handle(context: ?*anyopaque, event: SaxEvent) callconv(.C) void {
-        // Cast context back to *EventCapture
-        const self = @as(*EventCapture, @ptrCast(@alignCast(context orelse return)));
-        // Create a copy of the event to store
-        const event_copy = SaxEvent{
-            .type = event.type,
-            .name = .{ .ptr = event.name.ptr, .len = event.name.len },
-            .attributes = .{
-                .ptr = if (event.attributes.len > 0) blk: {
-                    const attrs = self.events.allocator.alloc(Attribute, event.attributes.len) catch return;
-                    for (event.attributes.ptr.?[0..event.attributes.len], 0..) |attr, i| {
-                        attrs[i] = Attribute{
-                            .name = .{ .ptr = attr.name.ptr, .len = attr.name.len },
-                            .value = .{ .ptr = attr.value.ptr, .len = attr.value.len },
-                        };
-                    }
-                    break :blk attrs.ptr;
-                } else null,
-                .len = event.attributes.len,
-            },
-        };
-        self.events.append(event_copy) catch return;
-    }
-};
-
-test "SaxParser processes XML input correctly" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
-
-    // Initialize event capture
-    var capture = EventCapture.init(alloc);
-    defer capture.deinit();
-
-    // Initialize parser with the capture handler
-    var parser = try SaxParser.init(alloc, &capture, EventCapture.handle);
-    defer parser.deinit();
-
-    // Input XML (same as in original main)
-    const input =
-        "<?xml version=\"1.0\"?>\n" ++
-        "<book id=\"123\" lang=\"en\">\n" ++
-        "  <!-- This is a comment -->\n" ++
-        "  <title>Hello World</title>\n" ++
-        "  <![CDATA[Some <b>CDATA</b> content]]>\n" ++
-        "</book>";
-
-    // Parse the input
-    parser.write(input);
-
-    // Expected events, including whitespace Text events
-    const expected_events = [_]struct {
-        event_type: SaxEventType,
-        name: []const u8,
-        attributes: []const struct { name: []const u8, value: []const u8 } = &.{},
-    }{
-        .{ .event_type = .ProcessingInstruction, .name = "xml version=\"1.0\"" },
-        .{ .event_type = .Text, .name = "\n" }, // Whitespace after PI
-        .{ .event_type = .Open, .name = "book", .attributes = &.{
-            .{ .name = "id", .value = "123" },
-            .{ .name = "lang", .value = "en" },
-        } },
-        .{ .event_type = .Text, .name = "\n  " }, // Whitespace before comment
-        .{ .event_type = .Comment, .name = "This is a comment" },
-        .{ .event_type = .Text, .name = "\n  " }, // Whitespace after comment
-        .{ .event_type = .Open, .name = "title" },
-        .{ .event_type = .Text, .name = "Hello World" },
-        .{ .event_type = .Close, .name = "title" },
-        .{ .event_type = .Text, .name = "\n  " }, // Whitespace after title
-        .{ .event_type = .Cdata, .name = "Some <b>CDATA</b> content" },
-        .{ .event_type = .Text, .name = "\n" }, // Whitespace after CDATA
-        .{ .event_type = .Close, .name = "book" },
-    };
-
-    // Verify the number of events
-    try testing.expectEqual(expected_events.len, capture.events.items.len);
-
-    // Verify each event
-    for (expected_events, capture.events.items, 0..expected_events.len) |expected, actual, _| {
-        // Check event type
-        try testing.expectEqual(expected.event_type, actual.type);
-
-        // Check event name
-        const actual_name = actual.name.ptr[0..actual.name.len];
-        try testing.expectEqualStrings(expected.name, actual_name);
-
-        // Check attributes
-        try testing.expectEqual(expected.attributes.len, actual.attributes.len);
-        if (expected.attributes.len > 0) {
-            const actual_attrs = actual.attributes.ptr.?[0..actual.attributes.len];
-            for (expected.attributes, actual_attrs, 0..expected.attributes.len) |exp_attr, act_attr, _| {
-                const act_attr_name = act_attr.name.ptr[0..act_attr.name.len];
-                const act_attr_value = act_attr.value.ptr[0..act_attr.value.len];
-                try testing.expectEqualStrings(exp_attr.name, act_attr_name);
-                try testing.expectEqualStrings(exp_attr.value, act_attr_value);
-            }
-        }
-    }
-}
