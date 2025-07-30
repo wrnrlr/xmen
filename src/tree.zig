@@ -487,14 +487,26 @@ test "Doc.prepend" {
     try std.testing.expectEqual(2, Node.count(doc.*));
 }
 
-test "Element.attributes" {}
-test "Element.children" {}
-test "Attribute.getValue" {}
-test "Attribute.setValue" {}
-test "Text.getValue" {}
-test "Text.setValue" {}
-test "Comment.getValue" {}
-test "Comment.setValue" {}
-test "ProcInst.getValue" {}
-test "ProcInst.setValue" {}
-test "Doc.children" {}
+test "Attribute.getValue" {
+    var attr = try Node.Attr(testing.allocator, "title", "Mr");
+    defer attr.destroy();
+    try testing.expectEqualStrings("Mr", attr.getValue());
+}
+
+test "Attribute.setValue" {
+    var attr = try Node.Attr(testing.allocator, "title", "Mr");
+    defer attr.destroy();
+
+    try attr.setValue("Ms");
+    try testing.expectEqualStrings("Ms", attr.getValue());
+}
+
+// test "Element.attributes" {}
+// test "Element.children" {}
+// test "Text.getValue" {}
+// test "Text.setValue" {}
+// test "Comment.getValue" {}
+// test "Comment.setValue" {}
+// test "ProcInst.getValue" {}
+// test "ProcInst.setValue" {}
+// test "Doc.children" {}
