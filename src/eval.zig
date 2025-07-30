@@ -177,22 +177,17 @@ const testing = std.testing;
 test "XPathEvaluator: simple path evaluation" {
     const allocator = testing.allocator;
 
-    // Create a simple XML document
     var doc = Document.init(allocator);
     defer doc.deinit();
 
     var root = Element.init(allocator, "root");
-    defer root.deinit();
     var child = Element.init(allocator, "child");
-    defer child.deinit();
 
     const child_node = try allocator.create(Node);
     child_node.* = Node{ .element = &child };
-    const root_parent_node = try allocator.create(Node);
-    root_parent_node.* = Node{ .element = &root };
-    _ = try root.appendChild(root_parent_node, child_node);
     const root_node = try allocator.create(Node);
     root_node.* = Node{ .element = &root };
+    _ = try root.appendChild(root_node, child_node); // Use root_node as parent
     try doc.children.append(root_node);
 
     // Parse and evaluate XPath
@@ -217,37 +212,36 @@ test "XPathEvaluator: simple path evaluation" {
 test "XPathEvaluator: path with predicate" {
     const allocator = testing.allocator;
 
-    // Create XML document with attributes
     var doc = Document.init(allocator);
     defer doc.deinit();
 
     var root = Element.init(allocator, "root");
-    defer root.deinit();
     var child = Element.init(allocator, "child");
-    defer child.deinit();
+    var child2 = Element.init(allocator, "child");
+
+    // Create attribute for child
     const attr = try allocator.create(Attr);
     attr.* = Attr.init("attr", "value", null);
     const attr_node = try allocator.create(Node);
     attr_node.* = Node{ .attribute = attr };
     try child.setAttributeNode(@constCast(&Node{ .element = @constCast(&child) }), attr_node);
-    var child2 = Element.init(allocator, "child");
-    defer child2.deinit();
+
+    // Create attribute for child2
     const attr2 = try allocator.create(Attr);
     attr2.* = Attr.init("attr", "wrong", null);
     const attr2_node = try allocator.create(Node);
     attr2_node.* = Node{ .attribute = attr2 };
     try child2.setAttributeNode(@constCast(&Node{ .element = @constCast(&child2) }), attr2_node);
 
+    // Build DOM tree
     const child_node = try allocator.create(Node);
     child_node.* = Node{ .element = &child };
     const child2_node = try allocator.create(Node);
     child2_node.* = Node{ .element = &child2 };
-    const root_parent_node = try allocator.create(Node);
-    root_parent_node.* = Node{ .element = &root };
-    _ = try root.appendChild(root_parent_node, child_node);
-    _ = try root.appendChild(root_parent_node, child2_node);
     const root_node = try allocator.create(Node);
     root_node.* = Node{ .element = &root };
+    _ = try root.appendChild(root_node, child_node);
+    _ = try root.appendChild(root_node, child2_node);
     try doc.children.append(root_node);
 
     // Parse and evaluate XPath
