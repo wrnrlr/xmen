@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 pub const NodeList = std.ArrayList(*Node);
 pub const NamedNodeMap = std.AutoArrayHashMap([]const u8, [:0]const u8);
 
-pub const Element = struct {
+const Element = struct {
     alloc: Allocator,
     name: [:0]const u8,
     attributes: *NamedNodeMap,
@@ -34,7 +34,7 @@ pub const Element = struct {
     }
 };
 
-pub const Attribute = struct {
+const Attribute = struct {
     alloc: Allocator, // Added allocator field
     name: [:0]const u8,
     value: [:0]const u8,
@@ -52,7 +52,7 @@ pub const Attribute = struct {
     }
 };
 
-pub const CharData = struct {
+const CharData = struct {
     alloc: Allocator, // Added allocator field
     content: [:0]const u8,
     parent: ?*Node = null,
@@ -67,7 +67,7 @@ pub const CharData = struct {
     }
 };
 
-pub const Document = struct {
+const Document = struct {
     alloc: Allocator,
     children: *NodeList,
 
@@ -166,6 +166,21 @@ pub const Node = union(NodeType) {
         };
     }
 
+    // private
+    fn setParent(n: *Node, m: ?*Node) void {
+      std.debug.assert(n.* == .element or n.* == .attribute or n.* == .text or n.* == .cdata or n.* == .comment or n.* == .proc_inst);
+      std.debug.assert(m == null or m.?.* == .element or m.?.* == .document or m.?.* == .attribute);
+      switch (n.*) {
+          .element => |*e| e.parent = m,
+          .attribute => |*a| a.parent = m,
+          .text => |*t| t.parent = m,
+          .cdata => |*c| c.parent = m,
+          .proc_inst => |*p| p.parent = m,
+          .comment => |*c| c.parent = m,
+          .document => {},
+      }
+    }
+
     fn allocator(n: *Node) Allocator {
         return switch (n.*) {
             .element => |e| e.alloc,
@@ -190,13 +205,22 @@ pub const Node = union(NodeType) {
         }
     }
 
-    pub fn destroy(n: *Node) void {
+    fn destroy(n: *Node) void {
         const alloc = n.allocator();
         n.deinit();
         alloc.destroy(n);
     }
 
     // Inner nodes: Elem & Doc
+
+    pub fn count(n: Node) usize {
+        return switch (n) {
+            .element => |e| e.children.items.len,
+            .document => |d| d.children.items.len,
+            else => unreachable,
+        };
+    }
+
     pub fn children(n: Node) *NodeList {
         return switch (n) {
             .element => |e| e.children,
@@ -205,10 +229,39 @@ pub const Node = union(NodeType) {
         };
     }
 
+    // Remove a node from its current parent, if any
+    fn detach(n: *Node) void {
+        if (n.parent()) |ancestor| {
+            switch (ancestor.*) {
+                .element => |*e| {
+                    // Find and remove the node from the children list
+                    for (e.children.items, 0..) |child, i| {
+                        if (child == n) {
+                            _ = e.children.orderedRemove(i);
+                            break;
+                        }
+                    }
+                },
+                .document => |*d| {
+                    for (d.children.items, 0..) |child, i| {
+                        if (child == n) {
+                            _ = d.children.orderedRemove(i);
+                            break;
+                        }
+                    }
+                },
+                else => unreachable,
+            }
+            n.setParent(null);
+        }
+    }
+
     pub fn append(n: *Node, child: *Node) !void {
         std.debug.assert(n.* == .element or n.* == .document);
-        std.debug.assert(child.* == .element or child.* == .text or child.* == .cdata or child.* == .comment or child.* == .proc_inst);
-        child.parent = n;
+        std.debug.assert(child.* == .element or child.* == .text or child.* == .cdata or
+                          child.* == .comment or child.* == .proc_inst);
+        child.detach();
+        child.setParent(n);
         switch (n.*) {
             .element => |*e| try e.children.append(child),
             .document => |*d| try d.children.append(child),
@@ -218,11 +271,13 @@ pub const Node = union(NodeType) {
 
     pub fn prepend(n: *Node, child: *Node) !void {
         std.debug.assert(n.* == .element or n.* == .document);
-        std.debug.assert(child.* == .element or child.* == .text or child.* == .cdata or child.* == .comment or child.* == .proc_inst);
-        child.parent = n;
+        std.debug.assert(child.* == .element or child.* == .text or child.* == .cdata or
+                          child.* == .comment or child.* == .proc_inst);
+        child.detach();
+        child.setParent(n);
         switch (n.*) {
-            .element => |*e| try e.children.prepend(child),
-            .document => |*d| try d.children.prepend(child),
+            .element => |*e| try e.children.insert(0, child),
+            .document => |*d| try d.children.insert(0, child),
             else => unreachable,
         }
     }
@@ -380,6 +435,32 @@ test "Attribute.getName" {
     try testing.expectEqualStrings("title", attr.getName());
 }
 
+test "Node.append" {
+    var doc = try Node.Doc(testing.allocator);
+    defer doc.destroy();
+
+    const elem = try Node.Elem(testing.allocator, "div");
+    const text = try Node.Text(testing.allocator, "Hello");
+
+    try Node.append(doc, elem);
+    try Node.append(doc, text);
+
+    try std.testing.expectEqual(2, Node.count(doc.*));
+}
+
+test "Doc.prepend" {
+    var doc = try Node.Doc(testing.allocator);
+    defer doc.destroy();
+
+    const elem = try Node.Elem(testing.allocator, "div");
+    const text = try Node.Text(testing.allocator, "Hello");
+
+    try Node.prepend(doc, elem);
+    try Node.prepend(doc, text);
+
+    try std.testing.expectEqual(2, Node.count(doc.*));
+}
+
 test "Element.attributes" {}
 test "Element.append" {}
 test "Element.prepend" {}
@@ -392,6 +473,4 @@ test "Comment.getValue" {}
 test "Comment.setValue" {}
 test "ProcInst.getValue" {}
 test "ProcInst.setValue" {}
-test "Doc.append" {}
-test "Doc.prepend" {}
 test "Doc.children" {}
