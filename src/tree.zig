@@ -429,12 +429,6 @@ test "Elem.getName" {
     try testing.expectEqualStrings("div", elem.getName());
 }
 
-test "Attribute.getName" {
-    var attr = try Node.Attr(testing.allocator, "title", "Mr");
-    defer attr.destroy();
-    try testing.expectEqualStrings("title", attr.getName());
-}
-
 test "Elem.append" {
     var elem = try Node.Elem(testing.allocator, "div");
     defer elem.destroy();
@@ -485,6 +479,12 @@ test "Doc.prepend" {
     try Node.prepend(doc, text);
 
     try std.testing.expectEqual(2, Node.count(doc.*));
+}
+
+test "Attribute.getName" {
+    var attr = try Node.Attr(testing.allocator, "title", "Mr");
+    defer attr.destroy();
+    try testing.expectEqualStrings("title", attr.getName());
 }
 
 test "Attribute.getValue" {
