@@ -3,7 +3,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const NodeList = std.ArrayList(*Node);
-pub const NamedNodeMap = std.AutoArrayHashMap([]const u8, [:0]const u8);
+pub const NamedNodeMap = std.StringArrayHashMap([:0]const u8);
 
 const Element = struct {
     alloc: Allocator,
@@ -29,6 +29,8 @@ const Element = struct {
         }
         self.children.deinit();
         self.alloc.destroy(self.children);
+        for (self.attributes.values()) |value|
+            self.alloc.free(value);
         self.attributes.deinit();
         self.alloc.destroy(self.attributes);
     }
@@ -299,6 +301,27 @@ pub const Node = union(NodeType) {
         };
     }
 
+    pub fn getAttribute(n: *Node, name: [:0]const u8) ?[:0]const u8 {
+        std.debug.assert(n.* == .element);
+        return switch (n.*) {
+            .element => |e| e.attributes.get(name),
+            else => unreachable,
+        };
+    }
+
+    pub fn setAttribute(n: *Node, name: []const u8, value: []const u8) !void {
+        std.debug.assert(n.* == .element);
+        switch (n.*) {
+            .element => |*e| {
+                const value_copy = try e.alloc.dupeZ(u8, value);
+                if (try e.attributes.fetchPut(name, value_copy)) |entry| {
+                    e.alloc.free(entry.value);
+                }
+            },
+            else => unreachable,
+        }
+    }
+
     // Value Nodes: Attr, Text, CData, Comment, ProcInst
     pub fn setValue(n: *Node, value: [:0]const u8) !void {
         const alloc = n.allocator();
@@ -453,6 +476,33 @@ test "Elem.prepend" {
     try Node.prepend(elem, text);
 
     try std.testing.expectEqual(2, Node.count(elem.*));
+}
+
+test "Element.getAttribute" {
+    var elem = try Node.Elem(testing.allocator, "div");
+    defer elem.destroy();
+
+    try testing.expectEqual(null, elem.getAttribute("id"));
+
+    try elem.setAttribute("id", "main");
+    try testing.expectEqualStrings("main", elem.getAttribute("id").?);
+}
+
+test "Element.setAttribute" {
+    var elem = try Node.Elem(testing.allocator, "div");
+    defer elem.destroy();
+
+    // Set a new attribute
+    try elem.setAttribute("id", "main");
+    try testing.expectEqualStrings("main", elem.getAttribute("id").?);
+
+    // Update existing attribute
+    try elem.setAttribute("id", "content");
+    try testing.expectEqualStrings("content", elem.getAttribute("id").?);
+
+    // Add another attribute
+    try elem.setAttribute("class", "container");
+    try testing.expectEqualStrings("container", elem.getAttribute("class").?);
 }
 
 test "Doc.append" {
