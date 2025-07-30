@@ -501,12 +501,61 @@ test "Attribute.setValue" {
     try testing.expectEqualStrings("Ms", attr.getValue());
 }
 
-// test "Element.attributes" {}
+test "Text.getValue" {
+    var text = try Node.Text(testing.allocator, "Hello");
+    defer text.destroy();
+    try testing.expectEqualStrings("Hello", text.getValue());
+}
+
+test "Text.setValue" {
+    var text = try Node.Text(testing.allocator, "Hello");
+    defer text.destroy();
+
+    try text.setValue("World");
+    try testing.expectEqualStrings("World", text.getValue());
+}
+
+test "CData.getValue" {
+    var cdata = try Node.CData(testing.allocator, "DATA");
+    defer cdata.destroy();
+    try testing.expectEqualStrings("DATA", cdata.getValue());
+}
+
+test "CData.setValue" {
+    var cdata = try Node.CData(testing.allocator, "DATA");
+    defer cdata.destroy();
+
+    try cdata.setValue("NEW_DATA");
+    try testing.expectEqualStrings("NEW_DATA", cdata.getValue());
+}
+
+test "Comment.getValue" {
+    var comment = try Node.Comment(testing.allocator, "Help");
+    defer comment.destroy();
+    try testing.expectEqualStrings("Help", comment.getValue());
+}
+
+test "Comment.setValue" {
+    var comment = try Node.Comment(testing.allocator, "Help");
+    defer comment.destroy();
+
+    try comment.setValue("Info");
+    try testing.expectEqualStrings("Info", comment.getValue());
+}
+
+test "ProcInst.getValue" {
+    var procinst = try Node.ProcInst(testing.allocator, "xml version=\"1.0\"");
+    defer procinst.destroy();
+    try testing.expectEqualStrings("xml version=\"1.0\"", procinst.getValue());
+}
+
+test "ProcInst.setValue" {
+    var procinst = try Node.ProcInst(testing.allocator, "xml version=\"1.0\"");
+    defer procinst.destroy();
+
+    try procinst.setValue("xml version=\"2.0\"");
+    try testing.expectEqualStrings("xml version=\"2.0\"", procinst.getValue());
+}
+
 // test "Element.children" {}
-// test "Text.getValue" {}
-// test "Text.setValue" {}
-// test "Comment.getValue" {}
-// test "Comment.setValue" {}
-// test "ProcInst.getValue" {}
-// test "ProcInst.setValue" {}
 // test "Doc.children" {}
