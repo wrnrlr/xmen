@@ -286,6 +286,7 @@ pub const Node = union(NodeType) {
 
     // Named nodes: Elem & Attr
     pub fn getName(n: Node) [:0]const u8 {
+        std.debug.assert(n == .element or n == .attribute);
         return switch (n) {
             .element => |e| e.name,
             .attribute => |a| a.name,
@@ -295,6 +296,7 @@ pub const Node = union(NodeType) {
 
     // Elem
     pub fn attributes(n: Node) *NamedNodeMap {
+        std.debug.assert(n.* == .element);
         return switch (n) {
             .element => |e| e.attributes,
             else => unreachable,
@@ -324,6 +326,7 @@ pub const Node = union(NodeType) {
 
     // Value Nodes: Attr, Text, CData, Comment, ProcInst
     pub fn setValue(n: *Node, value: [:0]const u8) !void {
+        std.debug.assert(n.* == .attribute or n.* == .text or n.* == .cdata or n.* == .comment or n.* == .proc_inst);
         const alloc = n.allocator();
         switch (n.*) {
             .attribute => |*a| {
@@ -351,6 +354,7 @@ pub const Node = union(NodeType) {
     }
 
     pub fn getValue(n: Node) [:0]const u8 {
+        std.debug.assert(n == .attribute or n == .text or n == .cdata or n == .comment or n == .proc_inst);
         return switch (n) {
             .attribute => |a| a.value,
             .text => |t| t.content,
