@@ -435,7 +435,33 @@ test "Attribute.getName" {
     try testing.expectEqualStrings("title", attr.getName());
 }
 
-test "Node.append" {
+test "Elem.append" {
+    var elem = try Node.Elem(testing.allocator, "div");
+    defer elem.destroy();
+
+    const elem2 = try Node.Elem(testing.allocator, "div");
+    const text = try Node.Text(testing.allocator, "Hello");
+
+    try Node.append(elem, elem2);
+    try Node.append(elem, text);
+
+    try std.testing.expectEqual(2, Node.count(elem.*));
+}
+
+test "Elem.prepend" {
+    var elem = try Node.Elem(testing.allocator, "div");
+    defer elem.destroy();
+
+    const elem2 = try Node.Elem(testing.allocator, "div");
+    const text = try Node.Text(testing.allocator, "Hello");
+
+    try Node.prepend(elem, elem2);
+    try Node.prepend(elem, text);
+
+    try std.testing.expectEqual(2, Node.count(elem.*));
+}
+
+test "Doc.append" {
     var doc = try Node.Doc(testing.allocator);
     defer doc.destroy();
 
@@ -462,8 +488,6 @@ test "Doc.prepend" {
 }
 
 test "Element.attributes" {}
-test "Element.append" {}
-test "Element.prepend" {}
 test "Element.children" {}
 test "Attribute.getValue" {}
 test "Attribute.setValue" {}
