@@ -5,7 +5,6 @@ const Allocator = std.mem.Allocator;
 pub const NodeList = std.ArrayList(*Node);
 pub const NamedNodeMap = std.AutoArrayHashMap([]const u8, [:0]const u8);
 
-// Define structs outside the union to avoid recursive dependency
 pub const Element = struct {
     alloc: Allocator,
     name: [:0]const u8,
@@ -36,33 +35,35 @@ pub const Element = struct {
 };
 
 pub const Attribute = struct {
+    alloc: Allocator, // Added allocator field
     name: [:0]const u8,
-    value: [:0]const u8, // Changed from [*:0]const u8 to [:0]const u8 for consistency
+    value: [:0]const u8,
     parent: ?*Node = null,
 
     fn init(alloc: Allocator, name: []const u8, value: []const u8) !Attribute {
         const name_copy = try alloc.dupeZ(u8, name);
         const value_copy = try alloc.dupeZ(u8, value);
-        return .{ .name = name_copy, .value = value_copy };
+        return .{ .alloc = alloc, .name = name_copy, .value = value_copy };
     }
 
-    fn deinit(self: *Attribute, alloc: Allocator) void {
-        alloc.free(self.name);
-        alloc.free(self.value);
+    fn deinit(self: *Attribute) void {
+        self.alloc.free(self.name);
+        self.alloc.free(self.value);
     }
 };
 
 pub const CharData = struct {
-    content: [:0]const u8, // Changed from [*:0]const u8 to [:0]const u8
+    alloc: Allocator, // Added allocator field
+    content: [:0]const u8,
     parent: ?*Node = null,
 
     fn init(alloc: Allocator, content: []const u8) !CharData {
         const content_copy = try alloc.dupeZ(u8, content);
-        return .{ .content = content_copy };
+        return .{ .alloc = alloc, .content = content_copy };
     }
 
-    fn deinit(self: *CharData, alloc: Allocator) void {
-        alloc.free(self.content);
+    fn deinit(self: *CharData) void {
+        self.alloc.free(self.content);
     }
 };
 
@@ -165,28 +166,34 @@ pub const Node = union(NodeType) {
         };
     }
 
-    fn allocator(n: *Node) ?Allocator {
+    fn allocator(n: *Node) Allocator {
         return switch (n.*) {
             .element => |e| e.alloc,
+            .attribute => |a| a.alloc,
+            .text => |t| t.alloc,
+            .cdata => |c| c.alloc,
+            .proc_inst => |p| p.alloc,
+            .comment => |c| c.alloc,
             .document => |d| d.alloc,
-            .attribute => |a| if (a.parent) |p| p.allocator() else null,
-            .text => |t| if (t.parent) |p| p.allocator() else null,
-            .cdata => |c| if (c.parent) |p| p.allocator() else null,
-            .proc_inst => |p| if (p.parent) |p_| p_.allocator() else null,
-            .comment => |c| if (c.parent) |p| p.allocator() else null,
         };
     }
 
     pub fn deinit(n: *Node) void {
         switch (n.*) {
             .element => |*e| e.deinit(),
-            .attribute => |*a| if (n.allocator()) |alloc| a.deinit(alloc),
-            .text => |*t| if (n.allocator()) |alloc| t.deinit(alloc),
-            .cdata => |*c| if (n.allocator()) |alloc| c.deinit(alloc),
-            .proc_inst => |*p| if (n.allocator()) |alloc| p.deinit(alloc),
-            .comment => |*c| if (n.allocator()) |alloc| c.deinit(alloc),
+            .attribute => |*a| a.deinit(),
+            .text => |*t| t.deinit(),
+            .cdata => |*c| c.deinit(),
+            .proc_inst => |*p| p.deinit(),
+            .comment => |*c| c.deinit(),
             .document => |*d| d.deinit(),
         }
+    }
+
+    pub fn destroy(n: *Node) void {
+        const alloc = n.allocator();
+        n.deinit();
+        alloc.destroy(n);
     }
 
     // Inner nodes: Elem & Doc
@@ -239,36 +246,27 @@ pub const Node = union(NodeType) {
 
     // Value Nodes: Attr, Text, CData, Comment, ProcInst
     pub fn setValue(n: *Node, value: [:0]const u8) !void {
+        const alloc = n.allocator();
         switch (n.*) {
             .attribute => |*a| {
-                if (n.allocator()) |alloc| {
-                    alloc.free(a.value);
-                    a.value = try alloc.dupeZ(u8, value);
-                }
+                alloc.free(a.value);
+                a.value = try alloc.dupeZ(u8, value);
             },
             .text => |*t| {
-                if (n.allocator()) |alloc| {
-                    alloc.free(t.content);
-                    t.content = try alloc.dupeZ(u8, value);
-                }
+                alloc.free(t.content);
+                t.content = try alloc.dupeZ(u8, value);
             },
             .cdata => |*c| {
-                if (n.allocator()) |alloc| {
-                    alloc.free(c.content);
-                    c.content = try alloc.dupeZ(u8, value);
-                }
+                alloc.free(c.content);
+                c.content = try alloc.dupeZ(u8, value);
             },
             .comment => |*c| {
-                if (n.allocator()) |alloc| {
-                    alloc.free(c.content);
-                    c.content = try alloc.dupeZ(u8, value);
-                }
+                alloc.free(c.content);
+                c.content = try alloc.dupeZ(u8, value);
             },
             .proc_inst => |*p| {
-                if (n.allocator()) |alloc| {
-                    alloc.free(p.content);
-                    p.content = try alloc.dupeZ(u8, value);
-                }
+                alloc.free(p.content);
+                p.content = try alloc.dupeZ(u8, value);
             },
             else => unreachable,
         }
@@ -312,73 +310,73 @@ const testing = std.testing;
 
 test "Node.archetype" {
     var elem = try Node.Elem(testing.allocator, "div");
-    defer elem.deinit();
+    defer elem.destroy();
     try testing.expectEqual(NodeType.element, elem.archetype());
 
     var attr = try Node.Attr(testing.allocator, "id", "1");
-    defer attr.deinit();
+    defer attr.destroy();
     try testing.expectEqual(NodeType.attribute, attr.archetype());
 
     var text = try Node.Text(testing.allocator, "Hello");
-    defer text.deinit();
+    defer text.destroy();
     try testing.expectEqual(NodeType.text, text.archetype());
 
     var cdata = try Node.CData(testing.allocator, "DATA");
-    defer cdata.deinit();
+    defer cdata.destroy();
     try testing.expectEqual(NodeType.cdata, cdata.archetype());
 
     var procinst = try Node.ProcInst(testing.allocator, "xml version=\"1.0\"");
-    defer procinst.deinit();
+    defer procinst.destroy();
     try testing.expectEqual(NodeType.proc_inst, procinst.archetype());
 
     var comment = try Node.Comment(testing.allocator, "Help");
-    defer comment.deinit();
-    try testing.expectEqual(NodeType.comment, comment.archetype()); // Fixed from .cdata to .comment
+    defer comment.destroy();
+    try testing.expectEqual(NodeType.comment, comment.archetype());
 
     var doc = try Node.Doc(testing.allocator);
-    defer doc.deinit();
+    defer doc.destroy();
     try testing.expectEqual(NodeType.document, doc.archetype());
 }
 
 test "Node.parent" {
     var elem = try Node.Elem(testing.allocator, "div");
-    defer elem.deinit();
+    defer elem.destroy();
     try testing.expectEqual(null, elem.parent());
 
     var attr = try Node.Attr(testing.allocator, "id", "1");
-    defer attr.deinit();
+    defer attr.destroy();
     try testing.expectEqual(null, attr.parent());
 
     var text = try Node.Text(testing.allocator, "Hello");
-    defer text.deinit();
+    defer text.destroy();
     try testing.expectEqual(null, text.parent());
 
     var cdata = try Node.CData(testing.allocator, "DATA");
-    defer cdata.deinit();
+    defer cdata.destroy();
     try testing.expectEqual(null, cdata.parent());
 
     var procinst = try Node.ProcInst(testing.allocator, "xml version=\"1.0\"");
-    defer procinst.deinit();
+    defer procinst.destroy();
     try testing.expectEqual(null, procinst.parent());
 
     var comment = try Node.Comment(testing.allocator, "Help");
-    defer comment.deinit();
+    defer comment.destroy();
     try testing.expectEqual(null, comment.parent());
 
     var doc = try Node.Doc(testing.allocator);
-    defer doc.deinit();
+    defer doc.destroy();
     try testing.expectEqual(null, doc.parent());
 }
 
 test "Elem.getName" {
     var elem = try Node.Elem(testing.allocator, "div");
-    defer elem.deinit();
+    defer elem.destroy();
     try testing.expectEqualStrings("div", elem.getName());
 }
 
 test "Attribute.getName" {
     var attr = try Node.Attr(testing.allocator, "title", "Mr");
-    defer attr.deinit();
+    defer attr.destroy();
     try testing.expectEqualStrings("title", attr.getName());
 }
 
