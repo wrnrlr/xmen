@@ -2,22 +2,22 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-pub const NodeList = std.ArrayList(*Node);
-pub const NamedNodeMap = std.StringArrayHashMap([:0]const u8);
+pub const ArrayList = std.ArrayList;
+pub const StringArrayHashMap = std.StringArrayHashMap;
 
 const Element = struct {
     alloc: Allocator,
     name: [:0]const u8,
-    attributes: *NamedNodeMap,
-    children: *NodeList,
+    attributes: *StringArrayHashMap([:0]const u8),
+    children: *ArrayList(*Node),
     parent: ?*Node = null,
 
     fn init(alloc: Allocator, tag: []const u8) !Element {
         const name = try alloc.dupeZ(u8, tag);
-        const attrs = try alloc.create(NamedNodeMap);
-        attrs.* = NamedNodeMap.init(alloc);
-        const kids = try alloc.create(NodeList);
-        kids.* = NodeList.init(alloc);
+        const attrs = try alloc.create(StringArrayHashMap([:0]const u8));
+        attrs.* = StringArrayHashMap([:0]const u8).init(alloc);
+        const kids = try alloc.create(ArrayList(*Node));
+        kids.* = ArrayList(*Node).init(alloc);
         return .{ .alloc = alloc, .name = name, .attributes = attrs, .children = kids };
     }
 
@@ -71,11 +71,11 @@ const CharData = struct {
 
 const Document = struct {
     alloc: Allocator,
-    children: *NodeList,
+    children: *ArrayList(*Node),
 
     fn init(alloc: Allocator) !Document {
-        const kids = try alloc.create(NodeList);
-        kids.* = NodeList.init(alloc);
+        const kids = try alloc.create(ArrayList(*Node));
+        kids.* = ArrayList(*Node).init(alloc);
         return .{ .alloc = alloc, .children = kids };
     }
 
@@ -223,7 +223,7 @@ pub const Node = union(NodeType) {
         };
     }
 
-    pub fn children(n: Node) *NodeList {
+    pub fn children(n: Node) *ArrayList(Node) {
         return switch (n) {
             .element => |e| e.children,
             .document => |d| d.children,
@@ -295,7 +295,7 @@ pub const Node = union(NodeType) {
     }
 
     // Elem
-    pub fn attributes(n: Node) *NamedNodeMap {
+    pub fn attributes(n: Node) *StringArrayHashMap([:0]const u8) {
         std.debug.assert(n.* == .element);
         return switch (n) {
             .element => |e| e.attributes,
