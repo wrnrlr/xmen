@@ -8,36 +8,37 @@ pub const StringArrayHashMap = std.StringArrayHashMap;
 const Element = struct {
     alloc: Allocator,
     name: [:0]const u8,
-    attributes: *StringArrayHashMap([:0]const u8),
-    children: *ArrayList(*Node),
+    attributes: NamedNodeMap,
+    children: NodeList,
     parent: ?*Node = null,
 
     fn init(alloc: Allocator, tag: []const u8) !Element {
         const name = try alloc.dupeZ(u8, tag);
-        const attrs = try alloc.create(StringArrayHashMap([:0]const u8));
-        attrs.* = StringArrayHashMap([:0]const u8).init(alloc);
-        const kids = try alloc.create(ArrayList(*Node));
+        const attrs = try alloc.create(NamedNodeMap);
+        attrs.* = try NamedNodeMap.init(alloc);
+        const kids = try alloc.create(NodeList);
         kids.* = ArrayList(*Node).init(alloc);
         return .{ .alloc = alloc, .name = name, .attributes = attrs, .children = kids };
     }
 
-    fn deinit(self: *Element) void {
-        self.alloc.free(self.name);
-        for (self.children.items) |child| {
-            child.deinit();
-            self.alloc.destroy(child);
-        }
-        self.children.deinit();
-        self.alloc.destroy(self.children);
-        for (self.attributes.values()) |value|
-            self.alloc.free(value);
-        self.attributes.deinit();
-        self.alloc.destroy(self.attributes);
+    fn deinit(elem: *Element) void {
+        elem.alloc.free(elem.name);
+        elem.children.destroy();
+        elem.attributes.destroy();
+    }
+
+    fn getAttribute(elem: *Element, name: [:0]const u8) *Node {
+      return elem.attributes.getNamedItem(name);
+    }
+
+    fn setAttribute(elem: *Element, name: [:0]const u8, value: [:0]const u8) void {
+      if (elem.getAttribute(name)) |attr|
+        return attr.setValue(value);
     }
 };
 
 const Attribute = struct {
-    alloc: Allocator, // Added allocator field
+    alloc: Allocator,
     name: [:0]const u8,
     value: [:0]const u8,
     parent: ?*Node = null,
@@ -48,14 +49,19 @@ const Attribute = struct {
         return .{ .alloc = alloc, .name = name_copy, .value = value_copy };
     }
 
-    fn deinit(self: *Attribute) void {
-        self.alloc.free(self.name);
-        self.alloc.free(self.value);
+    fn deinit(attr: *Attribute) void {
+        attr.alloc.free(attr.name);
+        attr.alloc.free(attr.value);
+    }
+
+    fn setValue(attr: Attribute,  value: [:0]const u8) void {
+        attr.alloc.free(attr.value);
+        attr.value = try attr.alloc.dupeZ(u8, value);
     }
 };
 
 const CharData = struct {
-    alloc: Allocator, // Added allocator field
+    alloc: Allocator,
     content: [:0]const u8,
     parent: ?*Node = null,
 
@@ -64,29 +70,116 @@ const CharData = struct {
         return .{ .alloc = alloc, .content = content_copy };
     }
 
-    fn deinit(self: *CharData) void {
-        self.alloc.free(self.content);
+    fn deinit(char: *CharData) void {
+        char.alloc.free(char.content);
+    }
+
+    fn setContent(char: CharData,  value: [:0]const u8) void {
+        char.alloc.free(char.content);
+        char.content = try char.alloc.dupeZ(u8, value);
     }
 };
 
 const Document = struct {
     alloc: Allocator,
-    children: *ArrayList(*Node),
+    children: *NodeList,
 
     fn init(alloc: Allocator) !Document {
-        const kids = try alloc.create(ArrayList(*Node));
-        kids.* = ArrayList(*Node).init(alloc);
+        const kids = try alloc.create(NodeList);
+        kids.* = try NodeList.init(alloc);
         return .{ .alloc = alloc, .children = kids };
     }
 
-    fn deinit(self: *Document) void {
-        for (self.children.items) |child| {
-            child.deinit();
-            self.alloc.destroy(child);
-        }
-        self.children.deinit();
-        self.alloc.destroy(self.children);
+    fn deinit(doc: *Document) void {
+        doc.children.deinit();
     }
+
+    fn destroy(doc: *Document) void {
+        doc.children.deinit();
+        doc.children.destroy();
+    }
+};
+
+pub const NodeList = struct {
+  alloc: Allocator,
+  children: ArrayList(*Node),
+
+  fn init(alloc: Allocator) !NodeList {
+      const kids = try alloc.create(ArrayList(*Node));
+      kids.* = ArrayList(*Node).init(alloc);
+      return .{ .alloc = alloc, .children = kids };
+  }
+
+  fn deinit(self: *NodeList) void {
+    for (self.children.items) |child| {
+        child.deinit();
+        self.alloc.destroy(child);
+    }
+    self.children.deinit();
+  }
+
+  fn destroy(self: *NodeList) void {
+    self.deinit();
+    self.alloc.destroy(self.children);
+  }
+
+  fn remove(self: *NodeList, item: *Node) void {
+    for (self.children.items, 0..) |child, i| {
+        if (child == item) {
+            _ = self.children.orderedRemove(i);
+            break;
+        }
+    }
+  }
+};
+
+pub const NamedNodeMap = struct {
+  alloc: Allocator,
+  items: ArrayList(*Node),
+  // names: ArrayList([:0]const u8),
+
+  pub fn keys(_: *NamedNodeMap) ArrayList([:0]const u8) {
+    // TODO, change type if you like
+    // loop over items and collect name of attributes
+  }
+
+  pub fn values(_: *NamedNodeMap) ArrayList(*Node) {
+    // TODO, change type if you like
+    // // loop over items and collect value of attributes
+  }
+
+  fn init(alloc: Allocator) !NodeList {
+      const attrs = try alloc.create(ArrayList(*Node));
+      attrs.* = StringArrayHashMap(ArrayList(*Node)).init(alloc);
+      return .{ .alloc = alloc, .items = attrs };
+  }
+
+  fn destroy(self: *NamedNodeMap) void {
+    for (self.items.values()) |value|
+        self.alloc.free(value);
+    self.items.deinit();
+    self.alloc.destroy(self.items);
+  }
+
+  fn getNamedItem(self: *NamedNodeMap, name: [:0]const u8) ?*Node {
+    for (self.keys(), 0..) |n,i|
+      if (std.mem.eql([:0]const u8, name, n))
+        return self.items[i];
+  }
+
+  fn setNamedItem(self: *NamedNodeMap, item: *Node) void {
+    std.debug.assert(item.* == .attribute);
+    if (self.getNamedItem()) |n| n.setValue(item.getValue());
+    _ = self.getNamedItem();
+    // TODO
+    // find the attr node in self.names with name
+    // if exists change
+    // if non exists, create a new attr node
+  }
+
+  fn removeNamedItem(_: *NamedNodeMap) void {
+    // TODO
+  }
 };
 
 pub const NodeType = enum(u8) {
@@ -151,6 +244,12 @@ pub const Node = union(NodeType) {
         return node;
     }
 
+    fn destroy(n: *Node) void {
+        const alloc = n.allocator();
+        n.deinit();
+        alloc.destroy(n);
+    }
+
     // Node methods
     pub fn archetype(n: Node) NodeType {
         return @as(NodeType, n);
@@ -168,19 +267,17 @@ pub const Node = union(NodeType) {
         };
     }
 
-    // private
     fn setParent(n: *Node, m: ?*Node) void {
-      std.debug.assert(n.* == .element or n.* == .attribute or n.* == .text or n.* == .cdata or n.* == .comment or n.* == .proc_inst);
-      std.debug.assert(m == null or m.?.* == .element or m.?.* == .document or m.?.* == .attribute);
-      switch (n.*) {
-          .element => |*e| e.parent = m,
-          .attribute => |*a| a.parent = m,
-          .text => |*t| t.parent = m,
-          .cdata => |*c| c.parent = m,
-          .proc_inst => |*p| p.parent = m,
-          .comment => |*c| c.parent = m,
-          .document => {},
-      }
+        std.debug.assert(m == null or m.?.* == .element or m.?.* == .document or m.?.* == .attribute);
+        switch (n.*) {
+            .element => |*e| e.parent = m,
+            .attribute => |*a| a.parent = m,
+            .text => |*t| t.parent = m,
+            .cdata => |*c| c.parent = m,
+            .proc_inst => |*p| p.parent = m,
+            .comment => |*c| c.parent = m,
+            .document => undefined,
+        }
     }
 
     fn allocator(n: *Node) Allocator {
@@ -207,12 +304,6 @@ pub const Node = union(NodeType) {
         }
     }
 
-    fn destroy(n: *Node) void {
-        const alloc = n.allocator();
-        n.deinit();
-        alloc.destroy(n);
-    }
-
     // Inner nodes: Elem & Doc
 
     pub fn count(n: Node) usize {
@@ -223,7 +314,7 @@ pub const Node = union(NodeType) {
         };
     }
 
-    pub fn children(n: Node) *ArrayList(Node) {
+    pub fn children(n: Node) *NodeList {
         return switch (n) {
             .element => |e| e.children,
             .document => |d| d.children,
@@ -235,23 +326,8 @@ pub const Node = union(NodeType) {
     fn detach(n: *Node) void {
         if (n.parent()) |ancestor| {
             switch (ancestor.*) {
-                .element => |*e| {
-                    // Find and remove the node from the children list
-                    for (e.children.items, 0..) |child, i| {
-                        if (child == n) {
-                            _ = e.children.orderedRemove(i);
-                            break;
-                        }
-                    }
-                },
-                .document => |*d| {
-                    for (d.children.items, 0..) |child, i| {
-                        if (child == n) {
-                            _ = d.children.orderedRemove(i);
-                            break;
-                        }
-                    }
-                },
+                .element => |*e| e.remove(n),
+                .document => |*d| d.remove(n),
                 else => unreachable,
             }
             n.setParent(null);
@@ -259,9 +335,7 @@ pub const Node = union(NodeType) {
     }
 
     pub fn append(n: *Node, child: *Node) !void {
-        std.debug.assert(n.* == .element or n.* == .document);
-        std.debug.assert(child.* == .element or child.* == .text or child.* == .cdata or
-                          child.* == .comment or child.* == .proc_inst);
+        std.debug.assert(child.* != .document or child.* != .attribute);
         child.detach();
         child.setParent(n);
         switch (n.*) {
@@ -272,9 +346,7 @@ pub const Node = union(NodeType) {
     }
 
     pub fn prepend(n: *Node, child: *Node) !void {
-        std.debug.assert(n.* == .element or n.* == .document);
-        std.debug.assert(child.* == .element or child.* == .text or child.* == .cdata or
-                          child.* == .comment or child.* == .proc_inst);
+        std.debug.assert(child.* != .document or child.* != .attribute);
         child.detach();
         child.setParent(n);
         switch (n.*) {
@@ -286,7 +358,6 @@ pub const Node = union(NodeType) {
 
     // Named nodes: Elem & Attr
     pub fn getName(n: Node) [:0]const u8 {
-        std.debug.assert(n == .element or n == .attribute);
         return switch (n) {
             .element => |e| e.name,
             .attribute => |a| a.name,
@@ -295,8 +366,7 @@ pub const Node = union(NodeType) {
     }
 
     // Elem
-    pub fn attributes(n: Node) *StringArrayHashMap([:0]const u8) {
-        std.debug.assert(n.* == .element);
+    pub fn attributes(n: Node) *NamedNodeMap {
         return switch (n) {
             .element => |e| e.attributes,
             else => unreachable,
@@ -304,7 +374,6 @@ pub const Node = union(NodeType) {
     }
 
     pub fn getAttribute(n: *Node, name: [:0]const u8) ?[:0]const u8 {
-        std.debug.assert(n.* == .element);
         return switch (n.*) {
             .element => |e| e.attributes.get(name),
             else => unreachable,
@@ -312,49 +381,25 @@ pub const Node = union(NodeType) {
     }
 
     pub fn setAttribute(n: *Node, name: []const u8, value: []const u8) !void {
-        std.debug.assert(n.* == .element);
         switch (n.*) {
-            .element => |*e| {
-                const value_copy = try e.alloc.dupeZ(u8, value);
-                if (try e.attributes.fetchPut(name, value_copy)) |entry| {
-                    e.alloc.free(entry.value);
-                }
-            },
+            .element => |*e| e.setAttribute(name, value),
             else => unreachable,
         }
     }
 
     // Value Nodes: Attr, Text, CData, Comment, ProcInst
     pub fn setValue(n: *Node, value: [:0]const u8) !void {
-        std.debug.assert(n.* == .attribute or n.* == .text or n.* == .cdata or n.* == .comment or n.* == .proc_inst);
-        const alloc = n.allocator();
         switch (n.*) {
-            .attribute => |*a| {
-                alloc.free(a.value);
-                a.value = try alloc.dupeZ(u8, value);
-            },
-            .text => |*t| {
-                alloc.free(t.content);
-                t.content = try alloc.dupeZ(u8, value);
-            },
-            .cdata => |*c| {
-                alloc.free(c.content);
-                c.content = try alloc.dupeZ(u8, value);
-            },
-            .comment => |*c| {
-                alloc.free(c.content);
-                c.content = try alloc.dupeZ(u8, value);
-            },
-            .proc_inst => |*p| {
-                alloc.free(p.content);
-                p.content = try alloc.dupeZ(u8, value);
-            },
+            .attribute => |*a| a.setValue(value),
+            .text => |*t| t.setContent(value),
+            .cdata => |*c| c.setContent(value),
+            .comment => |*c| c.setContent(value),
+            .proc_inst => |*p| p.setContent(value),
             else => unreachable,
         }
     }
 
     pub fn getValue(n: Node) [:0]const u8 {
-        std.debug.assert(n == .attribute or n == .text or n == .cdata or n == .comment or n == .proc_inst);
         return switch (n) {
             .attribute => |a| a.value,
             .text => |t| t.content,
@@ -611,5 +656,48 @@ test "ProcInst.setValue" {
     try testing.expectEqualStrings("xml version=\"2.0\"", procinst.getValue());
 }
 
-// test "Element.children" {}
-// test "Doc.children" {}
+test "NodeList.keys" {
+  // TODO
+}
+
+test "NodeList.values" {
+  // TODO
+}
+
+test "NodeList.item" {
+  // TODO: Returns an item in the list by its index, or null if the index is out-of-bounds.
+
+}
+
+test "NodeList.entries" {
+  // TODO not sure how to do the iterator
+  // Returns an iterator, allowing code to go through all key/value pairs contained in the collection. (In this case, the keys are integers starting from 0 and the values are nodes.)
+}
+
+test "NamedNodeMap.getNamedItem" {
+  // TODO
+}
+
+test "NamedNodeMap.setNamedItem" {
+  // TODO
+}
+
+test "NamedNodeMap.removeNamedItem" {
+  // TODO
+}
+
+test "NamedNodeMap.length" {
+  // TODO
+}
+
+test "NamedNodeMap.item" {
+  // TODO Returns the Attr at the given index, or null if the index is higher or equal to the number of nodes.
+}
+
+test "NamedNodeMap.keys" {
+  // TODO
+}
+
+test "NamedNodeMap.values" {
+  // TODO
+}
