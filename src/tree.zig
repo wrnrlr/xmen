@@ -8,8 +8,8 @@ pub const StringArrayHashMap = std.StringArrayHashMap;
 const Element = struct {
     alloc: Allocator,
     name: [:0]const u8,
-    attributes: NamedNodeMap,
-    children: NodeList,
+    attributes: *NamedNodeMap,
+    children: *NodeList,
     parent: ?*Node = null,
 
     fn init(alloc: Allocator, tag: []const u8) !Element {
@@ -17,23 +17,33 @@ const Element = struct {
         const attrs = try alloc.create(NamedNodeMap);
         attrs.* = try NamedNodeMap.init(alloc);
         const kids = try alloc.create(NodeList);
-        kids.* = ArrayList(*Node).init(alloc);
+        kids.* = NodeList.init(alloc);
         return .{ .alloc = alloc, .name = name, .attributes = attrs, .children = kids };
     }
 
     fn deinit(elem: *Element) void {
         elem.alloc.free(elem.name);
-        elem.children.destroy();
-        elem.attributes.destroy();
+        elem.children.deinit();
+        elem.alloc.destroy(elem.children);
+        elem.attributes.deinit();
+        elem.alloc.destroy(elem.attributes);
     }
 
-    fn getAttribute(elem: *Element, name: [:0]const u8) *Node {
-      return elem.attributes.getNamedItem(name);
+    fn getAttribute(elem: *Element, name: [:0]const u8) ?*Node {
+        return elem.attributes.getNamedItem(name);
     }
 
-    fn setAttribute(elem: *Element, name: [:0]const u8, value: [:0]const u8) void {
-      if (elem.getAttribute(name)) |attr|
-        return attr.setValue(value);
+    fn setAttribute(elem: *Element, name: [:0]const u8, value: [:0]const u8) !void {
+        if (elem.getAttribute(name)) |attr| {
+            try attr.setValue(value);
+        } else {
+            const attr = try Node.Attr(elem.alloc, name, value);
+            try elem.attributes.setNamedItem(attr);
+        }
+    }
+
+    fn removeAttribute() void {
+      // TODO
     }
 };
 
@@ -54,7 +64,7 @@ const Attribute = struct {
         attr.alloc.free(attr.value);
     }
 
-    fn setValue(attr: Attribute,  value: [:0]const u8) void {
+    fn setValue(attr: *Attribute, value: [:0]const u8) !void {
         attr.alloc.free(attr.value);
         attr.value = try attr.alloc.dupeZ(u8, value);
     }
@@ -74,7 +84,7 @@ const CharData = struct {
         char.alloc.free(char.content);
     }
 
-    fn setContent(char: CharData,  value: [:0]const u8) void {
+    fn setContent(char: *CharData, value: [:0]const u8) !void {
         char.alloc.free(char.content);
         char.content = try char.alloc.dupeZ(u8, value);
     }
@@ -86,101 +96,138 @@ const Document = struct {
 
     fn init(alloc: Allocator) !Document {
         const kids = try alloc.create(NodeList);
-        kids.* = try NodeList.init(alloc);
+        kids.* = NodeList.init(alloc);
         return .{ .alloc = alloc, .children = kids };
     }
 
     fn deinit(doc: *Document) void {
         doc.children.deinit();
-    }
-
-    fn destroy(doc: *Document) void {
-        doc.children.deinit();
-        doc.children.destroy();
+        doc.alloc.destroy(doc.children);
     }
 };
 
 pub const NodeList = struct {
   alloc: Allocator,
-  children: ArrayList(*Node),
+  list: ArrayList(*Node),
 
-  fn init(alloc: Allocator) !NodeList {
-      const kids = try alloc.create(ArrayList(*Node));
-      kids.* = ArrayList(*Node).init(alloc);
-      return .{ .alloc = alloc, .children = kids };
+  fn init(alloc: Allocator) NodeList {
+      return .{ .alloc = alloc, .list = ArrayList(*Node).init(alloc) };
   }
 
   fn deinit(self: *NodeList) void {
-    for (self.children.items) |child| {
-        child.deinit();
-        self.alloc.destroy(child);
-    }
-    self.children.deinit();
+      for (self.list.items) |child| {
+          child.deinit();
+          self.alloc.destroy(child);
+      }
+      self.list.deinit();
   }
 
-  fn destroy(self: *NodeList) void {
-    self.deinit();
-    self.alloc.destroy(self.children);
+  fn item(self: *NodeList, index: usize) ?*Node {
+      return if (index < self.list.items.len) self.list.items[index] else null;
   }
 
-  fn remove(self: *NodeList, item: *Node) void {
-    for (self.children.items, 0..) |child, i| {
-        if (child == item) {
-            _ = self.children.orderedRemove(i);
-            break;
-        }
-    }
+  fn append(self: *NodeList, node: *Node) !void {
+      try self.list.append(node);
+  }
+
+  fn insert(self: *NodeList, index: usize, node: *Node) !void {
+      try self.list.insert(index, node);
+  }
+
+  fn remove(self: *NodeList, discarded: *Node) void {
+      for (self.list.items, 0..) |child, i| {
+          if (child == discarded) {
+              _ = self.list.orderedRemove(i);
+              break;
+          }
+      }
+  }
+
+  fn length(self: *NodeList) usize {
+      return self.list.items.len;
+  }
+
+  fn keys(self: *NodeList) []const usize {
+      var indices = std.ArrayList(usize).init(self.alloc);
+      defer indices.deinit();
+      for (0..self.list.items.len) |i| {
+          indices.append(i) catch return &.{};
+      }
+      return indices.toOwnedSlice() catch &.{};
+  }
+
+  fn values(self: *NodeList) []*Node {
+      return self.list.items;
+  }
+
+  fn entries(self: *NodeList) []const struct { usize, *Node } {
+      var result = std.ArrayList(struct { usize, *Node }).init(self.alloc);
+      defer result.deinit();
+      for (self.list.items, 0..) |node, i| {
+          result.append(.{ i, node }) catch return &.{};
+      }
+      return result.toOwnedSlice() catch &.{};
   }
 };
 
 pub const NamedNodeMap = struct {
   alloc: Allocator,
-  items: ArrayList(*Node),
-  // names: ArrayList([:0]const u8),
+  items: StringArrayHashMap(*Node),
 
-  pub fn keys(_: *NamedNodeMap) ArrayList([:0]const u8) {
-    // TODO, change type if you like
-    // loop over items and collect name of attributes
+  fn init(alloc: Allocator) !NamedNodeMap {
+      return .{ .alloc = alloc, .items = StringArrayHashMap(*Node).init(alloc) };
   }
 
-  pub fn values(_: *NamedNodeMap) ArrayList(*Node) {
-    // TODO, change type if you like
-    // // loop over items and collect value of attributes
-  }
-
-  fn init(alloc: Allocator) !NodeList {
-      const attrs = try alloc.create(ArrayList(*Node));
-      attrs.* = StringArrayHashMap(ArrayList(*Node)).init(alloc);
-      return .{ .alloc = alloc, .items = attrs };
-  }
-
-  fn destroy(self: *NamedNodeMap) void {
-    for (self.items.values()) |value|
-        self.alloc.free(value);
-    self.items.deinit();
-    self.alloc.destroy(self.items);
+  fn deinit(self: *NamedNodeMap) void {
+      for (self.items.values()) |value| {
+          value.deinit();
+          self.alloc.destroy(value);
+      }
+      self.items.deinit();
   }
 
   fn getNamedItem(self: *NamedNodeMap, name: [:0]const u8) ?*Node {
-    for (self.keys(), 0..) |n,i|
-      if (std.mem.eql([:0]const u8, name, n))
-        return self.items[i];
+      return self.items.get(name);
   }
 
-  fn setNamedItem(self: *NamedNodeMap, item: *Node) void {
-    std.debug.assert(item.* == .attribute);
-    if (self.getNamedItem()) |n| n.setValue(item.getValue());
-    _ = self.getNamedItem();
-    // TODO
-    // find the attr node in self.names with name
-    // if exists change
-    // if non exists, create a new attr node
+  fn setNamedItem(self: *NamedNodeMap, new: *Node) !void {
+      std.debug.assert(new.* == .attribute);
+      const attr = &new.attribute;
+
+      if (self.items.get(attr.name)) |existing| {
+          try existing.setValue(attr.value);
+          new.deinit();
+          self.alloc.destroy(new);
+      } else {
+          try self.items.put(attr.name, new);
+      }
   }
 
-  fn removeNamedItem(_: *NamedNodeMap) void {
-    // TODO
+  fn removeNamedItem(self: *NamedNodeMap, name: [:0]const u8) void {
+      if (self.items.fetchRemove(name)) |node| {
+        node.deinit();
+        self.alloc.destroy(node);
+      }
+  }
+
+  fn length(self: *NamedNodeMap) usize {
+      return self.items.count();
+  }
+
+  fn item(self: *NamedNodeMap, index: usize) ?*Node {
+      if (index >= self.items.count()) return null;
+      return self.values()[index];
+  }
+
+  fn keys(self: *NamedNodeMap) []const []const u8 {
+      return self.items.keys();
+  }
+
+  fn values(self: *NamedNodeMap) []const *Node {
+      return self.items.values();
   }
 };
+
 
 pub const NodeType = enum(u8) {
     element = 1,
@@ -308,8 +355,8 @@ pub const Node = union(NodeType) {
 
     pub fn count(n: Node) usize {
         return switch (n) {
-            .element => |e| e.children.items.len,
-            .document => |d| d.children.items.len,
+            .element => |e| e.children.length(),
+            .document => |d| d.children.length(),
             else => unreachable,
         };
     }
@@ -326,8 +373,8 @@ pub const Node = union(NodeType) {
     fn detach(n: *Node) void {
         if (n.parent()) |ancestor| {
             switch (ancestor.*) {
-                .element => |*e| e.remove(n),
-                .document => |*d| d.remove(n),
+                // .element => |*e| e.,
+                // .document => |*d| d.remove(n),
                 else => unreachable,
             }
             n.setParent(null);
@@ -375,14 +422,14 @@ pub const Node = union(NodeType) {
 
     pub fn getAttribute(n: *Node, name: [:0]const u8) ?[:0]const u8 {
         return switch (n.*) {
-            .element => |e| e.attributes.get(name),
+            .element => |e| if (e.attributes.getNamedItem(name)) |attr| attr.getValue() else null,
             else => unreachable,
         };
     }
 
     pub fn setAttribute(n: *Node, name: []const u8, value: []const u8) !void {
         switch (n.*) {
-            .element => |*e| e.setAttribute(name, value),
+            .element => |*e| try e.setAttribute(try e.alloc.dupeZ(u8, name), try e.alloc.dupeZ(u8, value)),
             else => unreachable,
         }
     }
@@ -390,11 +437,11 @@ pub const Node = union(NodeType) {
     // Value Nodes: Attr, Text, CData, Comment, ProcInst
     pub fn setValue(n: *Node, value: [:0]const u8) !void {
         switch (n.*) {
-            .attribute => |*a| a.setValue(value),
-            .text => |*t| t.setContent(value),
-            .cdata => |*c| c.setContent(value),
-            .comment => |*c| c.setContent(value),
-            .proc_inst => |*p| p.setContent(value),
+            .attribute => |*a| try a.setValue(value),
+            .text => |*t| try t.setContent(value),
+            .cdata => |*c| try c.setContent(value),
+            .comment => |*c| try c.setContent(value),
+            .proc_inst => |*p| try p.setContent(value),
             else => unreachable,
         }
     }
@@ -656,48 +703,161 @@ test "ProcInst.setValue" {
     try testing.expectEqualStrings("xml version=\"2.0\"", procinst.getValue());
 }
 
+test "NodeList.item" {
+    var list = NodeList.init(testing.allocator);
+    defer list.deinit();
+
+    const node1 = try Node.Elem(testing.allocator, "div");
+    const node2 = try Node.Text(testing.allocator, "Hello");
+    try list.append(node1);
+    try list.append(node2);
+
+    try testing.expectEqual(node1, list.item(0).?);
+    try testing.expectEqual(node2, list.item(1).?);
+    try testing.expectEqual(null, list.item(2));
+}
+
 test "NodeList.keys" {
-  // TODO
+    var list = NodeList.init(testing.allocator);
+    defer list.deinit();
+
+    const node1 = try Node.Elem(testing.allocator, "div");
+    const node2 = try Node.Text(testing.allocator, "Hello");
+    try list.append(node1);
+    try list.append(node2);
+
+    const keys = list.keys();
+    defer testing.allocator.free(keys);
+    try testing.expectEqualSlices(usize, &[_]usize{ 0, 1 }, keys);
 }
 
 test "NodeList.values" {
-  // TODO
-}
+    var list = NodeList.init(testing.allocator);
+    defer list.deinit();
 
-test "NodeList.item" {
-  // TODO: Returns an item in the list by its index, or null if the index is out-of-bounds.
+    const node1 = try Node.Elem(testing.allocator, "div");
+    const node2 = try Node.Text(testing.allocator, "Hello");
+    try list.append(node1);
+    try list.append(node2);
 
+    const values = list.values();
+    try testing.expectEqualSlices(*Node, &[_]*Node{ node1, node2 }, values);
 }
 
 test "NodeList.entries" {
-  // TODO not sure how to do the iterator
-  // Returns an iterator, allowing code to go through all key/value pairs contained in the collection. (In this case, the keys are integers starting from 0 and the values are nodes.)
+    var list = NodeList.init(testing.allocator);
+    defer list.deinit();
+
+    const node1 = try Node.Elem(testing.allocator, "div");
+    const node2 = try Node.Text(testing.allocator, "Hello");
+    try list.append(node1);
+    try list.append(node2);
+
+    const entries = list.entries();
+    defer testing.allocator.free(entries);
+    try testing.expectEqual(2, entries.len);
+    try testing.expectEqual(0, entries[0][0]);
+    try testing.expectEqual(node1, entries[0][1]);
+    try testing.expectEqual(1, entries[1][0]);
+    try testing.expectEqual(node2, entries[1][1]);
 }
 
 test "NamedNodeMap.getNamedItem" {
-  // TODO
+    var map = try NamedNodeMap.init(testing.allocator);
+    defer map.deinit();
+
+    const attr1 = try Node.Attr(testing.allocator, "id", "main");
+    const attr2 = try Node.Attr(testing.allocator, "class", "container");
+    try map.setNamedItem(attr1);
+    try map.setNamedItem(attr2);
+
+    try testing.expectEqual(attr1, map.getNamedItem("id").?);
+    try testing.expectEqual(attr2, map.getNamedItem("class").?);
+    try testing.expectEqual(null, map.getNamedItem("style"));
 }
 
 test "NamedNodeMap.setNamedItem" {
-  // TODO
+    var map = try NamedNodeMap.init(testing.allocator);
+    defer map.deinit();
+
+    const attr1 = try Node.Attr(testing.allocator, "id", "main");
+    try map.setNamedItem(attr1);
+    try testing.expectEqualStrings("main", map.getNamedItem("id").?.getValue());
+
+    const attr2 = try Node.Attr(testing.allocator, "id", "content");
+    try map.setNamedItem(attr2);
+    try testing.expectEqualStrings("content", map.getNamedItem("id").?.getValue());
 }
 
 test "NamedNodeMap.removeNamedItem" {
-  // TODO
+    var map = try NamedNodeMap.init(testing.allocator);
+    defer map.deinit();
+
+    const attr = try Node.Attr(testing.allocator, "id", "main");
+    try map.setNamedItem(attr);
+    try testing.expectEqual(1, map.length());
+
+    map.removeNamedItem("id");
+    try testing.expectEqual(0, map.length());
+    try testing.expectEqual(null, map.getNamedItem("id"));
 }
 
 test "NamedNodeMap.length" {
-  // TODO
+    var map = try NamedNodeMap.init(testing.allocator);
+    defer map.deinit();
+
+    try testing.expectEqual(0, map.length());
+
+    const attr1 = try Node.Attr(testing.allocator, "id", "main");
+    const attr2 = try Node.Attr(testing.allocator, "class", "container");
+    try map.setNamedItem(attr1);
+    try map.setNamedItem(attr2);
+
+    try testing.expectEqual(2, map.length());
 }
 
 test "NamedNodeMap.item" {
-  // TODO Returns the Attr at the given index, or null if the index is higher or equal to the number of nodes.
+    var map = try NamedNodeMap.init(testing.allocator);
+    defer map.deinit();
+
+    const attr1 = try Node.Attr(testing.allocator, "id", "main");
+    const attr2 = try Node.Attr(testing.allocator, "class", "container");
+    try map.setNamedItem(attr1);
+    try map.setNamedItem(attr2);
+
+    // Order is not guaranteed in hash map, so we check presence
+    const item0 = map.item(0).?;
+    const item1 = map.item(1).?;
+    try testing.expect((item0 == attr1 and item1 == attr2) or (item0 == attr2 and item1 == attr1));
+    try testing.expectEqual(null, map.item(2));
 }
 
 test "NamedNodeMap.keys" {
-  // TODO
+    var map = try NamedNodeMap.init(testing.allocator);
+    defer map.deinit();
+
+    const attr1 = try Node.Attr(testing.allocator, "id", "main");
+    const attr2 = try Node.Attr(testing.allocator, "class", "container");
+    try map.setNamedItem(attr1);
+    try map.setNamedItem(attr2);
+
+    const keys = map.keys();
+    try testing.expectEqual(2, keys.len);
+    try testing.expect(std.mem.indexOfScalar([]const u8, keys, "id") != null);
+    try testing.expect(std.mem.indexOfScalar([]const u8, keys, "class") != null);
 }
 
 test "NamedNodeMap.values" {
-  // TODO
+    var map = try NamedNodeMap.init(testing.allocator);
+    defer map.deinit();
+
+    const attr1 = try Node.Attr(testing.allocator, "id", "main");
+    const attr2 = try Node.Attr(testing.allocator, "class", "container");
+    try map.setNamedItem(attr1);
+    try map.setNamedItem(attr2);
+
+    const values = map.values();
+    try testing.expectEqual(2, values.len);
+    try testing.expect(std.mem.indexOfScalar(*Node, values, attr1) != null);
+    try testing.expect(std.mem.indexOfScalar(*Node, values, attr2) != null);
 }
