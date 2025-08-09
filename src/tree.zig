@@ -204,9 +204,9 @@ pub const NamedNodeMap = struct {
   }
 
   fn removeNamedItem(self: *NamedNodeMap, name: [:0]const u8) void {
-      if (self.items.fetchRemove(name)) |node| {
-        node.deinit();
-        self.alloc.destroy(node);
+      if (self.items.swapRemove(name)) |node| {
+          node.deinit();
+          self.alloc.destroy(node);
       }
   }
 
