@@ -40,13 +40,44 @@ pub const XPathEvaluator = struct {
         return XPathEvaluator{ .allocator = allocator };
     }
 
-    pub fn evaluate(self: *XPathEvaluator, doc: *Node, ast: *AstNode) !XPathResult {
+    pub fn evaluate(self: *XPathEvaluator, context_node: *Node, ast: *AstNode) !XPathResult {
         var result = XPathResult.init(self.allocator);
         errdefer result.deinit();
 
-        // Start evaluation from the document node
-        try self.evaluateNode(doc, ast, &result);
+        // Handle different starting contexts
+        const node_type = context_node.archetype();
+
+        // If we start with a document node, look for the root element
+        if (node_type == .document) {
+            const children_list = context_node.children();
+            for (children_list.values()) |child| {
+                if (child.archetype() == .element) {
+                    try self.evaluateNode(child, ast, &result);
+                }
+            }
+        } else {
+            // Start evaluation from the given node
+            try self.evaluateNode(context_node, ast, &result);
+        }
+
         return result;
+    }
+
+    // Also add this helper method for absolute path evaluation
+    pub fn evaluateAbsolute(self: *XPathEvaluator, context_node: *Node, ast: *AstNode) !XPathResult {
+        var result = XPathResult.init(self.allocator);
+        errdefer result.deinit();
+
+        // For absolute paths (starting with /), we need to find the document root
+        var current = context_node;
+
+        // Traverse up to find the document or root element
+        while (current.parent()) |parent| {
+            current = parent;
+        }
+
+        // Now evaluate from the root
+        return self.evaluate(current, ast);
     }
 
     fn evaluateNode(self: *XPathEvaluator, node: *Node, ast: *AstNode, result: *XPathResult) XPathError!void {

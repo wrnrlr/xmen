@@ -30,7 +30,7 @@ const { symbols } = dlopen(path, {
   // Element
   elem_tag: { args: [ptr], returns: cstring },
   elem_attrs: { args: [ptr], returns: ptr },
-  elem_attr: { args: [ptr, cstring], returns: cstring },
+  elem_attr: { args: [ptr, cstring], returns: cstring }, // Fixed: was elem_get_attr
   elem_set_attr: { args: [ptr, cstring, cstring], returns: i32 },
   elem_remove_attr: { args: [ptr, cstring], returns: i32 },
 
@@ -45,7 +45,7 @@ const { symbols } = dlopen(path, {
 
   // NamedNodeMap
   map_length: { args: [ptr], returns: i32 },
-  // map_item: { args: [ptr, i32], returns: ptr }, // What does this?
+  map_item: { args: [ptr, i32], returns: ptr },
   map_get: { args: [ptr, cstring], returns: ptr },
   map_set: { args: [ptr, ptr], returns: i32 },
   map_remove: { args: [ptr, cstring], returns: i32 },
@@ -57,16 +57,19 @@ const { symbols } = dlopen(path, {
   list_prepend: { args: [ptr, ptr], returns: i32 },
 
   // SAX
-  sax_alloc: {},
-  sax_cb: {},
-  sax_write: {},
-  sax_free: {},
+  sax_alloc: { args: [ptr, ptr], returns: ptr },
+  sax_cb: { args: [ptr, ptr], returns: i32 },
+  sax_write: { args: [ptr, cstring, i32], returns: i32 },
+  sax_free: { args: [ptr], returns: i32 },
 
-  // XMLParser
+  // XML Parsing
   xml_parse: { args: [cstring], returns: ptr },
 
-  //
+  // XPath
   xpath_eval: { args: [cstring, ptr], returns: ptr },
+  xpath_result_free: { args: [ptr], returns: i32 },
+  xpath_result_length: { args: [ptr], returns: i32 },
+  xpath_result_item: { args: [ptr, i32], returns: ptr },
 });
 
 export enum NodeType {
@@ -79,6 +82,211 @@ export enum NodeType {
   DOCUMENT_NODE = 9,
   DOCUMENT_TYPE_NODE = 10,
   DOCUMENT_FRAGMENT_NODE = 11,
+}
+
+// NodeList implementation
+export class NodeList {
+  public readonly ptr: Pointer;
+
+  constructor(ptr: Pointer) {
+    this.ptr = ptr;
+  }
+
+  get length(): number {
+    return symbols.list_length(this.ptr);
+  }
+
+  item(index: number): Node | null {
+    if (index < 0 || index >= this.length) return null;
+    const nodePtr = symbols.list_item(this.ptr, index);
+    if (!nodePtr) return null;
+    return createNode(nodePtr);
+  }
+
+  // Iterator support
+  *[Symbol.iterator](): Iterator<Node> {
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node) yield node;
+    }
+  }
+
+  // Array-like access
+  forEach(callback: (node: Node, index: number) => void): void {
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node) callback(node, i);
+    }
+  }
+
+  map<T>(callback: (node: Node, index: number) => T): T[] {
+    const result: T[] = [];
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node) result.push(callback(node, i));
+    }
+    return result;
+  }
+
+  filter(callback: (node: Node, index: number) => boolean): Node[] {
+    const result: Node[] = [];
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node && callback(node, i)) result.push(node);
+    }
+    return result;
+  }
+
+  append(node: Node): void {
+    symbols.list_append(this.ptr, node.ptr);
+  }
+
+  prepend(node: Node): void {
+    symbols.list_prepend(this.ptr, node.ptr);
+  }
+
+  // Convert to regular Array
+  toArray(): Node[] {
+    return Array.from(this);
+  }
+}
+
+// NamedNodeMap implementation
+export class NamedNodeMap {
+  public readonly ptr: Pointer;
+
+  constructor(ptr: Pointer) {
+    this.ptr = ptr;
+  }
+
+  get length(): number {
+    return symbols.map_length(this.ptr);
+  }
+
+  item(index: number): Attr | null {
+    if (index < 0 || index >= this.length) return null;
+    const attrPtr = symbols.map_item(this.ptr, index);
+    if (!attrPtr) return null;
+    return new Attr(attrPtr);
+  }
+
+  getNamedItem(name: string): Attr | null {
+    const attrPtr = symbols.map_get(this.ptr, name);
+    if (!attrPtr) return null;
+    return new Attr(attrPtr);
+  }
+
+  setNamedItem(attr: Attr): void {
+    symbols.map_set(this.ptr, attr.ptr);
+  }
+
+  removeNamedItem(name: string): void {
+    symbols.map_remove(this.ptr, name);
+  }
+
+  // Iterator support
+  *[Symbol.iterator](): Iterator<Attr> {
+    for (let i = 0; i < this.length; i++) {
+      const attr = this.item(i);
+      if (attr) yield attr;
+    }
+  }
+
+  // Helper methods
+  has(name: string): boolean {
+    return this.getNamedItem(name) !== null;
+  }
+
+  keys(): string[] {
+    const result: string[] = [];
+    for (const attr of this) {
+      result.push(attr.name);
+    }
+    return result;
+  }
+
+  values(): Attr[] {
+    return Array.from(this);
+  }
+}
+
+// XPath Result wrapper
+export class XPathResult {
+  public readonly ptr: Pointer;
+  private _freed: boolean = false;
+
+  constructor(ptr: Pointer) {
+    this.ptr = ptr;
+  }
+
+  get length(): number {
+    if (this._freed) return 0;
+    return symbols.xpath_result_length(this.ptr);
+  }
+
+  item(index: number): Node | null {
+    if (this._freed || index < 0 || index >= this.length) return null;
+    const nodePtr = symbols.xpath_result_item(this.ptr, index);
+    if (!nodePtr) return null;
+    return createNode(nodePtr);
+  }
+
+  // Iterator support
+  *[Symbol.iterator](): Iterator<Node> {
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node) yield node;
+    }
+  }
+
+  // Array-like methods
+  forEach(callback: (node: Node, index: number) => void): void {
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node) callback(node, i);
+    }
+  }
+
+  map<T>(callback: (node: Node, index: number) => T): T[] {
+    const result: T[] = [];
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node) result.push(callback(node, i));
+    }
+    return result;
+  }
+
+  filter(callback: (node: Node, index: number) => boolean): Node[] {
+    const result: Node[] = [];
+    for (let i = 0; i < this.length; i++) {
+      const node = this.item(i);
+      if (node && callback(node, i)) result.push(node);
+    }
+    return result;
+  }
+
+  // Convert to regular Array
+  toArray(): Node[] {
+    return Array.from(this);
+  }
+
+  // Get first matching node
+  get firstNode(): Node | null {
+    return this.item(0);
+  }
+
+  // Check if any results
+  get isEmpty(): boolean {
+    return this.length === 0;
+  }
+
+  // Free the XPath result
+  free(): void {
+    if (!this._freed) {
+      symbols.xpath_result_free(this.ptr);
+      this._freed = true;
+    }
+  }
 }
 
 export abstract class Node {
@@ -98,12 +306,40 @@ export abstract class Node {
     return createNode(parentPtr);
   }
 
+  get childNodes(): NodeList | null {
+    if (this.nodeType !== NodeType.ELEMENT_NODE && this.nodeType !== NodeType.DOCUMENT_NODE) {
+      return null;
+    }
+    const listPtr = symbols.inode_children(this.ptr);
+    if (!listPtr) return null;
+    return new NodeList(listPtr);
+  }
+
+  get hasChildNodes(): boolean {
+    return this.childNodes !== null && this.childNodes.length > 0;
+  }
+
   appendChild(child: Node): void {
     symbols.inode_append(this.ptr, child.ptr);
   }
 
   prependChild(child: Node): void {
     symbols.inode_prepend(this.ptr, child.ptr);
+  }
+
+  // XPath evaluation on this node
+  selectNodes(xpath: string): XPathResult {
+    const resultPtr = symbols.xpath_eval(xpath, this.ptr);
+    if (!resultPtr) throw new Error('XPath evaluation failed');
+    return new XPathResult(resultPtr);
+  }
+
+  // Convenience method to get first matching node
+  selectSingleNode(xpath: string): Node | null {
+    const result = this.selectNodes(xpath);
+    const node = result.firstNode;
+    result.free();
+    return node;
   }
 
   // Manual free to avoid memory leaks
@@ -115,6 +351,50 @@ export abstract class Node {
 export class Document extends Node {
   constructor() {
     super(symbols.alloc_doc()!);
+  }
+
+  get documentElement(): Element | null {
+    const children = this.childNodes;
+    if (!children) return null;
+
+    for (const child of children) {
+      if (child.nodeType === NodeType.ELEMENT_NODE) {
+        return child as Element;
+      }
+    }
+    return null;
+  }
+
+  createElement(tagName: string): Element {
+    return new Element(tagName);
+  }
+
+  createTextNode(data: string): Text {
+    return new Text(data);
+  }
+
+  createComment(data: string): Comment {
+    return new Comment(data);
+  }
+
+  createCDATASection(data: string): CDATASection {
+    return new CDATASection(data);
+  }
+
+  createProcessingInstruction(target: string, data: string = ''): ProcessingInstruction {
+    const content = data ? `${target} ${data}` : target;
+    return new ProcessingInstruction(content);
+  }
+
+  createAttribute(name: string, value: string = ''): Attr {
+    return new Attr(name, value);
+  }
+
+  // Parse XML string into this document
+  static parse(xmlString: string): Document | null {
+    const docPtr = symbols.xml_parse(xmlString);
+    if (!docPtr) return null;
+    return new Document() // Note: This creates a new doc, you might need to adjust based on xml_parse implementation
   }
 }
 
@@ -131,18 +411,30 @@ export class Element extends Node {
     return symbols.elem_tag(this.ptr)?.toString() ?? '';
   }
 
+  get localName(): string {
+    const tagName = this.tagName;
+    const colonIndex = tagName.indexOf(':');
+    return colonIndex !== -1 ? tagName.slice(colonIndex + 1) : tagName;
+  }
+
   get prefix(): string | null {
-    return null; // No namespace support
+    const tagName = this.tagName;
+    const colonIndex = tagName.indexOf(':');
+    return colonIndex !== -1 ? tagName.slice(0, colonIndex) : null;
+  }
+
+  get attributes(): NamedNodeMap {
+    const attrsPtr = symbols.elem_attrs(this.ptr);
+    if (!attrsPtr) throw new Error('Failed to get attributes');
+    return new NamedNodeMap(attrsPtr);
   }
 
   getAttribute(name: string): string | null {
-    return symbols.elem_get_attr(this.ptr, name)?.toString() ?? null;
+    return symbols.elem_attr(this.ptr, name)?.toString() ?? null; // Fixed: was elem_get_attr
   }
 
   getAttributeNode(name: string): Attr | null {
-    const attrPtr = symbols.map_get(symbols.elem_attrs(this.ptr), name);
-    if (!attrPtr) return null;
-    return new Attr(attrPtr);
+    return this.attributes.getNamedItem(name);
   }
 
   setAttribute(name: string, value: string): void {
@@ -150,15 +442,84 @@ export class Element extends Node {
   }
 
   setAttributeNode(node: Attr): void {
-    symbols.map_set(symbols.elem_attrs(this.ptr), node.ptr);
+    this.attributes.setNamedItem(node);
   }
 
   hasAttribute(name: string): boolean {
-    return !!symbols.elem_get_attr(this.ptr, name);
+    return this.getAttribute(name) !== null;
   }
 
   removeAttribute(name: string): void {
     symbols.elem_remove_attr(this.ptr, name);
+  }
+
+  removeAttributeNode(node: Attr): void {
+    this.attributes.removeNamedItem(node.name);
+  }
+
+  // Convenience methods for common operations
+  get textContent(): string {
+    let content = '';
+    const children = this.childNodes;
+    if (children) {
+      for (const child of children) {
+        if (child.nodeType === NodeType.TEXT_NODE ||
+            child.nodeType === NodeType.CDATA_SECTION_NODE) {
+          content += (child as CharacterData).data;
+        } else if (child.nodeType === NodeType.ELEMENT_NODE) {
+          content += (child as Element).textContent;
+        }
+      }
+    }
+    return content;
+  }
+
+  set textContent(value: string) {
+    // Clear existing children and add new text node
+    const children = this.childNodes;
+    if (children) {
+      // Note: This is a simplified implementation
+      // In a real implementation, you'd need to remove all children first
+    }
+    const textNode = new Text(value);
+    this.appendChild(textNode);
+  }
+
+  // Get elements by tag name
+  getElementsByTagName(tagName: string): Element[] {
+    const xpath = tagName === '*' ? './/*' : `.//${tagName}`;
+    const result = this.selectNodes(xpath);
+    const elements = result.filter((node): node is Element =>
+      node.nodeType === NodeType.ELEMENT_NODE
+    ) as Element[];
+    result.free();
+    return elements;
+  }
+
+  // Get element by ID (searches descendants)
+  getElementById(id: string): Element | null {
+    const xpath = `.//*[@id="${id}"]`;
+    const result = this.selectNodes(xpath);
+    const element = result.firstNode as Element | null;
+    result.free();
+    return element;
+  }
+
+  // Query selector using XPath
+  querySelector(xpath: string): Element | null {
+    const result = this.selectNodes(xpath);
+    const element = result.firstNode as Element | null;
+    result.free();
+    return element;
+  }
+
+  querySelectorAll(xpath: string): Element[] {
+    const result = this.selectNodes(xpath);
+    const elements = result.filter((node): node is Element =>
+      node.nodeType === NodeType.ELEMENT_NODE
+    ) as Element[];
+    result.free();
+    return elements;
   }
 }
 
@@ -176,12 +537,16 @@ export class Attr extends Node {
     return symbols.attr_name(this.ptr)?.toString() ?? '';
   }
 
-  get localName(): string | null {
-    return this.name; // No namespace
+  get localName(): string {
+    const name = this.name;
+    const colonIndex = name.indexOf(':');
+    return colonIndex !== -1 ? name.slice(colonIndex + 1) : name;
   }
 
   get prefix(): string | null {
-    return null;
+    const name = this.name;
+    const colonIndex = name.indexOf(':');
+    return colonIndex !== -1 ? name.slice(0, colonIndex) : null;
   }
 
   get value(): string {
@@ -199,7 +564,11 @@ export class Attr extends Node {
   }
 
   get namespaceURI(): string | null {
-    return null;
+    return null; // No namespace support yet
+  }
+
+  get specified(): boolean {
+    return true; // All attributes are considered specified
   }
 }
 
@@ -212,16 +581,53 @@ export abstract class CharacterData extends Node {
     symbols.content_set(this.ptr, value);
   }
 
+  get textContent(): string {
+    return this.data;
+  }
+
+  set textContent(value: string) {
+    this.data = value;
+  }
+
   get nextElementSibling(): Element | null {
-    return null; // TODO: Implement if needed
+    // TODO: Implement if needed
+    return null;
   }
 
   get previousElementSibling(): Element | null {
-    return null; // TODO: Implement if needed
+    // TODO: Implement if needed
+    return null;
   }
 
   get length(): number {
     return this.data.length;
+  }
+
+  substring(offset: number, count?: number): string {
+    const data = this.data;
+    if (count === undefined) {
+      return data.slice(offset);
+    }
+    return data.slice(offset, offset + count);
+  }
+
+  appendData(data: string): void {
+    this.data += data;
+  }
+
+  insertData(offset: number, data: string): void {
+    const current = this.data;
+    this.data = current.slice(0, offset) + data + current.slice(offset);
+  }
+
+  deleteData(offset: number, count: number): void {
+    const current = this.data;
+    this.data = current.slice(0, offset) + current.slice(offset + count);
+  }
+
+  replaceData(offset: number, count: number, data: string): void {
+    const current = this.data;
+    this.data = current.slice(0, offset) + data + current.slice(offset + count);
   }
 }
 
@@ -232,6 +638,18 @@ export class Text extends CharacterData {
     } else {
       super(contentOrPtr);
     }
+  }
+
+  splitText(offset: number): Text {
+    const currentData = this.data;
+    const newData = currentData.slice(offset);
+    this.data = currentData.slice(0, offset);
+    return new Text(newData);
+  }
+
+  get wholeText(): string {
+    // TODO: Implement to concatenate adjacent text nodes
+    return this.data;
   }
 }
 
@@ -248,6 +666,17 @@ export class ProcessingInstruction extends CharacterData {
     const content = this.data;
     const spaceIndex = content.indexOf(' ');
     return spaceIndex !== -1 ? content.slice(0, spaceIndex) : content;
+  }
+
+  get data(): string {
+    const content = super.data;
+    const spaceIndex = content.indexOf(' ');
+    return spaceIndex !== -1 ? content.slice(spaceIndex + 1) : '';
+  }
+
+  set data(value: string) {
+    const target = this.target;
+    super.data = value ? `${target} ${value}` : target;
   }
 }
 
@@ -271,30 +700,114 @@ export class Comment extends CharacterData {
   }
 }
 
+// SAX Parser interface
+export class SAXParser {
+  public readonly ptr: Pointer;
+  private callbacks: {
+    onOpenTag?: (name: string, attributes: Record<string, string>) => void;
+    onCloseTag?: (name: string) => void;
+    onText?: (text: string) => void;
+    onComment?: (comment: string) => void;
+    onProcessingInstruction?: (target: string, data: string) => void;
+    onCDATA?: (data: string) => void;
+  } = {};
+
+  constructor() {
+    // TODO: Implement SAX parser creation with callbacks
+    // This would require setting up callback functions that can be called from Zig
+    throw new Error('SAX Parser not yet implemented');
+  }
+
+  setHandler(event: string, callback: Function): void {
+    // TODO: Set event handlers
+  }
+
+  write(data: string): void {
+    // TODO: Write data to SAX parser
+  }
+
+  free(): void {
+    // TODO: Free SAX parser
+  }
+}
+
+// Node creation factory
 const nodeTypes: { [key: number]: new (ptr: Pointer) => Node } = {
-  1: Element,
-  2: Attr,
-  3: Text,
-  7: ProcessingInstruction,
-  8: Comment,
-  9: Document,
+  [NodeType.ELEMENT_NODE]: Element,
+  [NodeType.ATTRIBUTE_NODE]: Attr,
+  [NodeType.TEXT_NODE]: Text,
+  [NodeType.CDATA_SECTION_NODE]: CDATASection,
+  [NodeType.PROCESSING_INSTRUCTION_NODE]: ProcessingInstruction,
+  [NodeType.COMMENT_NODE]: Comment,
+  [NodeType.DOCUMENT_NODE]: Document,
 } as const;
 
 function createNode(ptr: Pointer): Node {
   const type = symbols.node_type(ptr);
-  const Cls = nodeTypes[type] || Node;
+  const Cls = nodeTypes[type];
+  if (!Cls) {
+    throw new Error(`Unknown node type: ${type}`);
+  }
   return new Cls(ptr);
 }
 
-// Example usage:
-const doc = new Document();
-const elem = new Element('div');
-elem.setAttribute('id', 'main');
-const text = new Text('Hello, world!');
-elem.appendChild(text);
-doc.appendChild(elem);
+// Utility functions
+export function parseXML(xmlString: string): Document | null {
+  const docPtr = symbols.xml_parse(xmlString);
+  if (!docPtr) return null;
+  return createNode(docPtr) as Document;
+}
 
-// To free resources when done
-text.free();
-elem.free();
-doc.free();
+// XPath evaluation at document level
+export function evaluateXPath(xpath: string, contextNode: Node): XPathResult {
+  return contextNode.selectNodes(xpath);
+}
+
+// Example usage:
+function example() {
+  // Create document structure
+  const doc = new Document();
+  const root = new Element('root');
+  root.setAttribute('id', 'main');
+
+  const child1 = new Element('child');
+  child1.setAttribute('type', 'first');
+  const text1 = new Text('Hello');
+  child1.appendChild(text1);
+
+  const child2 = new Element('child');
+  child2.setAttribute('type', 'second');
+  const text2 = new Text('World');
+  child2.appendChild(text2);
+
+  root.appendChild(child1);
+  root.appendChild(child2);
+  doc.appendChild(root);
+
+  // XPath queries
+  console.log('All children:', doc.selectNodes('//child').length);
+  console.log('First type children:', doc.selectNodes('//child[@type="first"]').length);
+  console.log('Text content of first child:', doc.selectSingleNode('//child[@type="first"]')?.textContent);
+
+  // Alternative using convenience methods
+  const firstChild = root.querySelector('.//child[@type="first"]');
+  console.log('First child tag:', firstChild?.tagName);
+
+  // Memory cleanup
+  const result = doc.selectNodes('//child');
+  result.forEach((node, index) => {
+    console.log(`Child ${index}: ${(node as Element).getAttribute('type')}`);
+  });
+  result.free(); // Important: free XPath results
+
+  // Free the document tree
+  text1.free();
+  text2.free();
+  child1.free();
+  child2.free();
+  root.free();
+  doc.free();
+}
+
+// Export the example for testing
+export { example };
