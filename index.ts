@@ -197,59 +197,59 @@ const nodeTypes = {
   9: Document,
 } as const;
 
-function createElement(tagName: string): Element {
-  throw 'todo';
-}
+// function createElement(tagName: string): Element {
+//   throw 'todo';
+// }
 
-// Parser
+// // Parser
 
-export function parseXML(xml: string): Node | null {
-  const buf = Buffer.from(xml);
-  const nodePtr = symbols.parse(buf, buf.length);
-  if (nodePtr === null) return null;
+// export function parseXML(xml: string): Node | null {
+//   const buf = Buffer.from(xml);
+//   const nodePtr = symbols.parse(buf, buf.length);
+//   if (nodePtr === null) return null;
 
-  const nodeType = symbols.node_type(nodePtr) as NodeType;
-  const NodeClass = (nodeTypes as any)[nodeType];
-  if (!NodeClass) {
-    symbols.node_free(nodePtr);
-    return null;
-  }
-  return new NodeClass(nodePtr);
-}
+//   const nodeType = symbols.node_type(nodePtr) as NodeType;
+//   const NodeClass = (nodeTypes as any)[nodeType];
+//   if (!NodeClass) {
+//     symbols.node_free(nodePtr);
+//     return null;
+//   }
+//   return new NodeClass(nodePtr);
+// }
 
 // XPath
 
-function xpath(xpath: string, node: Node): Node | null {
-  const buf = Buffer.from(xpath);
-  const ptr = symbols.xpath_eval(buf, buf.length, node.ptr);
-  if (ptr === null) return null;
+// function xpath(xpath: string, node: Node): Node | null {
+//   const buf = Buffer.from(xpath);
+//   const ptr = symbols.xpath_eval(buf, buf.length, node.ptr);
+//   if (ptr === null) return null;
 
-  const nodeType = symbols.node_type(ptr) as NodeType;
-  return symbols.node_type(ptr) === 1 ? new Element(ptr) : new Document(ptr)
-}
+//   const nodeType = symbols.node_type(ptr) as NodeType;
+//   return symbols.node_type(ptr) === 1 ? new Element(ptr) : new Document(ptr)
+// }
 
 // Example usage
-const doc = new Document();
-console.log("doc", doc.nodeType);
+// const doc = new Document();
+// console.log("doc", doc.nodeType);
 
-const elem = new Element("div");
-console.log('type', elem.nodeType);
-console.log('name', elem.tagName);
+// const elem = new Element("div");
+// console.log('type', elem.nodeType);
+// console.log('name', elem.tagName);
 
-console.log('attr id', elem.getAttribute('id'));
-elem.setAttribute("id", "1");
-console.log('attr id', elem.getAttribute('id'));
+// console.log('attr id', elem.getAttribute('id'));
+// elem.setAttribute("id", "1");
+// console.log('attr id', elem.getAttribute('id'));
 
-// Test parser
-const xml = `
-<?xml version="1.0" encoding="UTF-8"?>
-<root id="1">
-  <child class="test">Hello, <b>World</b>!</child>
-</root>
-`;
-const parsedNode = parseXML(xml);
-console.log('parsed node type', parsedNode?.nodeType);
+// // Test parser
+// const xml = `
+// <?xml version="1.0" encoding="UTF-8"?>
+// <root id="1">
+//   <child class="test">Hello, <b>World</b>!</child>
+// </root>
+// `;
+// const parsedNode = parseXML(xml);
+// console.log('parsed node type', parsedNode?.nodeType);
 
-// Test XPath
-const xpathResult = parsedNode?.evaluateXPath("/root/child[@class=\"test\"]");
-console.log('xpath result type', xpathResult?.nodeType);
+// // Test XPath
+// const xpathResult = parsedNode?.evaluateXPath("/root/child[@class=\"test\"]");
+// console.log('xpath result type', xpathResult?.nodeType);
