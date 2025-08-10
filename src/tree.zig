@@ -437,25 +437,38 @@ pub const Node = union(NodeType) {
     }
 
     // Value Nodes: Attr, Text, CData, Comment, ProcInst
-    pub fn setValue(n: *Node, value: [:0]const u8) !void {
+    pub fn setContent(n: *Node, value: [:0]const u8) !void {
         switch (n.*) {
-            .attribute => |*a| try a.setValue(value),
             .text => |*t| try t.setContent(value),
             .cdata => |*c| try c.setContent(value),
             .comment => |*c| try c.setContent(value),
             .proc_inst => |*p| try p.setContent(value),
-            else => unreachable,
+            else => undefined,
+        }
+    }
+
+    pub fn getContent(n: Node) [:0]const u8 {
+        return switch (n) {
+            .text => |t| t.content,
+            .cdata => |c| c.content,
+            .comment => |c| c.content,
+            .proc_inst => |p| p.content,
+            else => undefined,
+        };
+    }
+
+    // Value Nodes: Attr, Text, CData, Comment, ProcInst
+    pub fn setValue(n: *Node, value: [:0]const u8) !void {
+        switch (n.*) {
+            .attribute => |*a| try a.setValue(value),
+            else => undefined
         }
     }
 
     pub fn getValue(n: Node) [:0]const u8 {
         return switch (n) {
             .attribute => |a| a.value,
-            .text => |t| t.content,
-            .cdata => |c| c.content,
-            .comment => |c| c.content,
-            .proc_inst => |p| p.content,
-            else => unreachable,
+            else => undefined
         };
     }
 
@@ -649,60 +662,60 @@ test "Attribute.setValue" {
     try testing.expectEqualStrings("Ms", attr.getValue());
 }
 
-test "Text.getValue" {
+test "Text.getContent" {
     var text = try Node.Text(testing.allocator, "Hello");
     defer text.destroy();
-    try testing.expectEqualStrings("Hello", text.getValue());
+    try testing.expectEqualStrings("Hello", text.getContent());
 }
 
-test "Text.setValue" {
+test "Text.setContent" {
     var text = try Node.Text(testing.allocator, "Hello");
     defer text.destroy();
 
-    try text.setValue("World");
-    try testing.expectEqualStrings("World", text.getValue());
+    try text.setContent("World");
+    try testing.expectEqualStrings("World", text.getContent());
 }
 
-test "CData.getValue" {
+test "CData.getContent" {
     var cdata = try Node.CData(testing.allocator, "DATA");
     defer cdata.destroy();
-    try testing.expectEqualStrings("DATA", cdata.getValue());
+    try testing.expectEqualStrings("DATA", cdata.getContent());
 }
 
-test "CData.setValue" {
+test "CData.setContent" {
     var cdata = try Node.CData(testing.allocator, "DATA");
     defer cdata.destroy();
 
-    try cdata.setValue("NEW_DATA");
-    try testing.expectEqualStrings("NEW_DATA", cdata.getValue());
+    try cdata.setContent("NEW_DATA");
+    try testing.expectEqualStrings("NEW_DATA", cdata.getContent());
 }
 
-test "Comment.getValue" {
+test "Comment.getContent" {
     var comment = try Node.Comment(testing.allocator, "Help");
     defer comment.destroy();
-    try testing.expectEqualStrings("Help", comment.getValue());
+    try testing.expectEqualStrings("Help", comment.getContent());
 }
 
-test "Comment.setValue" {
+test "Comment.setContent" {
     var comment = try Node.Comment(testing.allocator, "Help");
     defer comment.destroy();
 
-    try comment.setValue("Info");
-    try testing.expectEqualStrings("Info", comment.getValue());
+    try comment.setContent("Info");
+    try testing.expectEqualStrings("Info", comment.getContent());
 }
 
-test "ProcInst.getValue" {
+test "ProcInst.getContent" {
     var procinst = try Node.ProcInst(testing.allocator, "xml version=\"1.0\"");
     defer procinst.destroy();
-    try testing.expectEqualStrings("xml version=\"1.0\"", procinst.getValue());
+    try testing.expectEqualStrings("xml version=\"1.0\"", procinst.getContent());
 }
 
-test "ProcInst.setValue" {
+test "ProcInst.setContent" {
     var procinst = try Node.ProcInst(testing.allocator, "xml version=\"1.0\"");
     defer procinst.destroy();
 
-    try procinst.setValue("xml version=\"2.0\"");
-    try testing.expectEqualStrings("xml version=\"2.0\"", procinst.getValue());
+    try procinst.setContent("xml version=\"2.0\"");
+    try testing.expectEqualStrings("xml version=\"2.0\"", procinst.getContent());
 }
 
 test "NodeList.item" {
