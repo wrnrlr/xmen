@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "zig build; bun run index.ts"
+    "build": "zig build; bun run index.ts",
+    "wc": "wc -l src/*.zig index.ts build.* README.md package.json"
   },
   "devDependencies": {
     "bun-types": "^1.2.19"
