@@ -1,3 +1,4 @@
+// JavaScript implementation of XMEN FFI
 import { dlopen, FFIType, suffix, CString, Pointer } from 'bun:ffi';
 const { i32, u8, ptr, cstring, i64 } = FFIType;
 
@@ -54,6 +55,18 @@ const { symbols } = dlopen(path, {
   list_item: { args: [ptr, i32], returns: ptr },
   list_append: { args: [ptr, ptr], returns: i32 },
   list_prepend: { args: [ptr, ptr], returns: i32 },
+
+  // SAX
+  sax_alloc: {},
+  sax_cb: {},
+  sax_write: {},
+  sax_free: {},
+
+  // XMLParser
+  xml_parse: { args: [cstring], returns: ptr },
+
+  //
+  xpath_eval: { args: [cstring, ptr], returns: ptr },
 });
 
 export enum NodeType {

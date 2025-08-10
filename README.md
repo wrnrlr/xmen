@@ -43,7 +43,7 @@ To build XMEN from source zig is required.
 ## Proposed JavaScript API
 
 ```typescript
-import { parse, xpath, sax } from './index.ts';
+import { parseXML, xpath, sax } from './index.ts';
 
 const xml = `
 <root>
@@ -53,16 +53,16 @@ const xml = `
 `;
 
 // Parse XML document from string
-const doc = parse(xml);
+const doc = xml(xml);
 
 // Select element in XML document
 const nodes = xpath('/root/child[@attr="A"]', doc)
-for (const node of nodes) console.log(node.toJSON())
+for (const node of nodes)
+  console.log(node.toJSON())
 
 // Test SAX parsing
-const resp = await fetch('')
-const events:any = sax(resp.stream)
-for await (const event of events) console.log(event.toJSON())
+for await (const event of sax(xml))
+  console.log(event)
 ```
 
 ## Proposed CLI
@@ -74,7 +74,7 @@ $ xmen xpath -f <URL|FILE|DIR> /library/book
 ## TODO
 
 * Maybe use [SegmentedList](https://ziglang.org/documentation/master/std/#std.segmented_list.SegmentedList) for `NodeList`.
-
+* Investigate what [String interning](https://en.wikipedia.org/wiki/String_interning) would mean doe api design and what speed trade-offs are involved. .
 
 ##
 

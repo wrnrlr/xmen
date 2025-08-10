@@ -11,6 +11,8 @@ const NamedNodeMap = dom.NamedNodeMap;
 
 const alloc = std.heap.page_allocator;
 
+// FFI for XML
+
 inline fn getNode(p: ?*anyopaque) ?*Node {
     if (p == null) return null;
     return @alignCast(@ptrCast(p));
@@ -239,6 +241,10 @@ pub export fn list_prepend(l_p: ?*anyopaque, item_p: ?*anyopaque) callconv(.C) i
     list.insert(0, item) catch return -1;
     return 0;
 }
+
+// FFI for Sax
+
+// FFI for XPath
 
 const testing = std.testing;
 
