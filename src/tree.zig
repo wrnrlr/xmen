@@ -34,6 +34,8 @@ const Element = struct {
     }
 
     fn setAttribute(elem: *Element, name: [:0]const u8, value: [:0]const u8) !void {
+        defer elem.alloc.free(@constCast(name[0..name.len + 1]));
+        defer elem.alloc.free(@constCast(value[0..value.len + 1]));
         if (elem.getAttribute(name)) |attr| {
             try attr.setValue(value);
         } else {
@@ -204,9 +206,9 @@ pub const NamedNodeMap = struct {
   }
 
   fn removeNamedItem(self: *NamedNodeMap, name: [:0]const u8) void {
-      if (self.items.fetchSwapRemove(name)) |_| {
-        // node.value.deinit();
-        // self.alloc.destroy(node.value);
+      if (self.items.fetchOrderedRemove(name)) |kv| {
+        kv.value.deinit();
+        self.alloc.destroy(kv.value);
       }
   }
 
@@ -373,8 +375,8 @@ pub const Node = union(NodeType) {
     fn detach(n: *Node) void {
         if (n.parent()) |ancestor| {
             switch (ancestor.*) {
-                // .element => |*e| e.,
-                // .document => |*d| d.remove(n),
+                .element => |*e| e.children.remove(n),
+                .document => |*d| d.children.remove(n),
                 else => unreachable,
             }
             n.setParent(null);
