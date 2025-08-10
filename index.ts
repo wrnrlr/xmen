@@ -1,56 +1,59 @@
 import { dlopen, FFIType, suffix, CString, Pointer } from 'bun:ffi';
-const { i32, u8, ptr, cstring, uint64_t: usize } = FFIType;
+const { i32, u8, ptr, cstring, i64 } = FFIType;
+
+console.log(`./zig-out/lib/libxmen.${suffix}`)
 
 const path = `./zig-out/lib/libxmen.${suffix}`;
 const { symbols } = dlopen(path, {
   // Constructors
-  alloc_elem: { args: [cstring, usize], returns: ptr },
-  alloc_attr: { args: [cstring, usize], returns: ptr },
-  alloc_text: { args: [cstring, usize], returns: ptr },
-  alloc_cdata: { args: [cstring, usize], returns: ptr },
-  alloc_comment: { args: [cstring, usize], returns: ptr },
-  alloc_procinst: { args: [cstring, usize], returns: ptr },
-  alloc_doc: { args: [cstring, usize], returns: ptr },
+  alloc_elem: { args: [cstring], returns: ptr },
+  alloc_attr: { args: [cstring, cstring], returns: ptr },
+  alloc_text: { args: [cstring], returns: ptr },
+  alloc_cdata: { args: [cstring], returns: ptr },
+  alloc_comment: { args: [cstring], returns: ptr },
+  alloc_procinst: { args: [cstring], returns: ptr },
+  alloc_doc: { args: [], returns: ptr },
 
   // General Node properties
   node_free: { args: [ptr], returns: i32 },
   node_type: { args: [ptr], returns: u8 },
   node_parent: { args: [ptr], returns: ptr },
-  node_setParent: { args: [ptr, ptr], returns: i32 },
+  node_set_parent: { args: [ptr, ptr], returns: i32 },
 
   // Inner node: Element & Document
   inode_children: { args: [ptr], returns: ptr },
-  inode_count: { args: [ptr], returns: ptr },
-  inode_append: { args: [ptr, ptr] },
-  inode_prepend: { args: [ptr, ptr] },
+  inode_count: { args: [ptr], returns: i64 },
+  inode_append: { args: [ptr, ptr], returns: i32 },
+  inode_prepend: { args: [ptr, ptr], returns: i32 },
 
   // Element
   elem_tag: { args: [ptr], returns: cstring },
-  elem_attributes: { args: [ptr] },
-  elem_getAttributes: { args: [ptr] },
-  elem_setAttributes: { args: [ptr] },
-  elem_removeAttributes: { args: [ptr] },
+  elem_attrs: { args: [ptr], returns: ptr },
+  elem_attr: { args: [ptr, cstring], returns: cstring },
+  elem_set_attr: { args: [ptr, cstring, cstring], returns: i32 },
+  elem_remove_attr: { args: [ptr, cstring], returns: i32 },
 
   // Attribute
-  attr_name: { args: [ptr] },
-  attr_value: { args: [ptr] },
-  attr_getValue: { args: [ptr] },
+  attr_name: { args: [ptr], returns: cstring },
+  attr_value: { args: [ptr], returns: cstring },
+  attr_set_value: { args: [ptr, cstring], returns: i32 },
 
   // Text Comment CData ProcInst
-  char_content: { args: [ptr] },
-  char_setContent: {},
+  content_get: { args: [ptr], returns: cstring },
+  content_set: { args: [ptr, cstring], returns: i32 },
 
   // NamedNodeMap
-  map_get: { args: [ptr], returns: ptr },
-  map_set: { args: [ptr] },
-  map_remove: { args: [ptr] },
+  map_length: { args: [ptr], returns: i32 },
+  // map_item: { args: [ptr, i32], returns: ptr }, // What does this?
+  map_get: { args: [ptr, cstring], returns: ptr },
+  map_set: { args: [ptr, ptr], returns: i32 },
+  map_remove: { args: [ptr, cstring], returns: i32 },
 
   // NodeList
   list_length: { args: [ptr], returns: i32 },
-  list_index: { args: [ptr, i32], returns: ptr },
-  list_append: { args: [ptr, ptr] },
-  list_prepend: { args: [ptr, ptr] },
-
+  list_item: { args: [ptr, i32], returns: ptr },
+  list_append: { args: [ptr, ptr], returns: i32 },
+  list_prepend: { args: [ptr, ptr], returns: i32 },
 });
 
 export enum NodeType {
@@ -75,120 +78,187 @@ export abstract class Node {
   get nodeType(): NodeType {
     return symbols.node_type(this.ptr) as NodeType;
   }
+
+  get parentNode(): Node | null {
+    const parentPtr = symbols.node_parent(this.ptr);
+    if (!parentPtr) return null;
+    return createNode(parentPtr);
+  }
+
+  appendChild(child: Node): void {
+    symbols.inode_append(this.ptr, child.ptr);
+  }
+
+  prependChild(child: Node): void {
+    symbols.inode_prepend(this.ptr, child.ptr);
+  }
+
+  // Manual free to avoid memory leaks
+  free(): void {
+    symbols.node_free(this.ptr);
+  }
 }
 
-class Document extends Node {
+export class Document extends Node {
   constructor() {
-    super(symbols.alloc_doc()!)
+    super(symbols.alloc_doc()!);
   }
 }
 
 export class Element extends Node {
-  constructor(tagName: string) {
-    super(symbols.alloc_elem(tagName)!)
+  constructor(tagNameOrPtr: string | Pointer) {
+    if (typeof tagNameOrPtr === 'string') {
+      super(symbols.alloc_elem(tagNameOrPtr)!);
+    } else {
+      super(tagNameOrPtr);
+    }
   }
 
   get tagName(): string {
-    return symbols.elem_tag(this.ptr).toString();
+    return symbols.elem_tag(this.ptr)?.toString() ?? '';
   }
 
   get prefix(): string | null {
-    return null;
+    return null; // No namespace support
   }
 
   getAttribute(name: string): string | null {
-    throw 'TODO'
+    return symbols.elem_get_attr(this.ptr, name)?.toString() ?? null;
   }
 
-  getAttributeNode(): Node | null {
-    throw 'TODO'
+  getAttributeNode(name: string): Attr | null {
+    const attrPtr = symbols.map_get(symbols.elem_attrs(this.ptr), name);
+    if (!attrPtr) return null;
+    return new Attr(attrPtr);
   }
 
   setAttribute(name: string, value: string): void {
-    throw 'TODO'
+    symbols.elem_set_attr(this.ptr, name, value);
   }
 
-  setAttributeNode(node: Node): void {
-    throw 'TODO'
+  setAttributeNode(node: Attr): void {
+    symbols.map_set(symbols.elem_attrs(this.ptr), node.ptr);
   }
 
   hasAttribute(name: string): boolean {
-    throw 'TODO'
+    return !!symbols.elem_get_attr(this.ptr, name);
+  }
+
+  removeAttribute(name: string): void {
+    symbols.elem_remove_attr(this.ptr, name);
   }
 }
 
-class Attr extends Node {
-  constructor(name: string, value: string) {
-    super(symbols.alloc_attr(name, value)!)
+export class Attr extends Node {
+  constructor(nameOrPtr: string | Pointer, value?: string) {
+    if (typeof nameOrPtr === 'string') {
+      if (value === undefined) throw new Error('Value required for new Attr');
+      super(symbols.alloc_attr(nameOrPtr, value)!);
+    } else {
+      super(nameOrPtr);
+    }
   }
 
-  get name(): string | null {
-    throw 'TODO'
+  get name(): string {
+    return symbols.attr_name(this.ptr)?.toString() ?? '';
   }
 
   get localName(): string | null {
-    throw 'TODO'
+    return this.name; // No namespace
   }
 
   get prefix(): string | null {
-    throw 'TODO'
+    return null;
   }
 
   get value(): string {
-    throw 'TODO'
+    return symbols.attr_value(this.ptr)?.toString() ?? '';
+  }
+
+  set value(val: string) {
+    symbols.attr_set_value(this.ptr, val);
   }
 
   get ownerElement(): Element | null {
-    throw 'TODO'
+    const parentPtr = symbols.node_parent(this.ptr);
+    if (!parentPtr) return null;
+    return new Element(parentPtr);
   }
 
   get namespaceURI(): string | null {
-    throw 'TODO'
+    return null;
   }
 }
 
-abstract class CharacterData extends Node {
-  data: string = '';
+export abstract class CharacterData extends Node {
+  get data(): string {
+    return symbols.content_get(this.ptr)?.toString() ?? '';
+  }
+
+  set data(value: string) {
+    symbols.content_set(this.ptr, value);
+  }
+
   get nextElementSibling(): Element | null {
-    return null;
+    return null; // TODO: Implement if needed
   }
+
   get previousElementSibling(): Element | null {
-    return null;
+    return null; // TODO: Implement if needed
   }
+
   get length(): number {
     return this.data.length;
   }
 }
 
-class Text extends CharacterData {
-  constructor(content: string) {
-    super(symbols.alloc_attr()!)
+export class Text extends CharacterData {
+  constructor(contentOrPtr: string | Pointer) {
+    if (typeof contentOrPtr === 'string') {
+      super(symbols.alloc_text(contentOrPtr)!);
+    } else {
+      super(contentOrPtr);
+    }
   }
 }
 
-class ProcessingInstruction extends CharacterData {
-  constructor(content: string) {
-    super(symbols.alloc_attr(content)!)
+export class ProcessingInstruction extends CharacterData {
+  constructor(contentOrPtr: string | Pointer) {
+    if (typeof contentOrPtr === 'string') {
+      super(symbols.alloc_procinst(contentOrPtr)!);
+    } else {
+      super(contentOrPtr);
+    }
   }
 
   get target(): string {
-    return 'todo';
+    const content = this.data;
+    const spaceIndex = content.indexOf(' ');
+    return spaceIndex !== -1 ? content.slice(0, spaceIndex) : content;
   }
 }
 
-class CDATASection extends CharacterData {
-  constructor(content: string) {
-    super(symbols.alloc_cdata(content)!)
+export class CDATASection extends CharacterData {
+  constructor(contentOrPtr: string | Pointer) {
+    if (typeof contentOrPtr === 'string') {
+      super(symbols.alloc_cdata(contentOrPtr)!);
+    } else {
+      super(contentOrPtr);
+    }
   }
 }
 
-class Comment extends CharacterData {
-  constructor(content: string) {
-    super(symbols.alloc_comment(content)!)
+export class Comment extends CharacterData {
+  constructor(contentOrPtr: string | Pointer) {
+    if (typeof contentOrPtr === 'string') {
+      super(symbols.alloc_comment(contentOrPtr)!);
+    } else {
+      super(contentOrPtr);
+    }
   }
 }
 
-const nodeTypes = {
+const nodeTypes: { [key: number]: new (ptr: Pointer) => Node } = {
   1: Element,
   2: Attr,
   3: Text,
@@ -197,59 +267,21 @@ const nodeTypes = {
   9: Document,
 } as const;
 
-// function createElement(tagName: string): Element {
-//   throw 'todo';
-// }
+function createNode(ptr: Pointer): Node {
+  const type = symbols.node_type(ptr);
+  const Cls = nodeTypes[type] || Node;
+  return new Cls(ptr);
+}
 
-// // Parser
+// Example usage:
+const doc = new Document();
+const elem = new Element('div');
+elem.setAttribute('id', 'main');
+const text = new Text('Hello, world!');
+elem.appendChild(text);
+doc.appendChild(elem);
 
-// export function parseXML(xml: string): Node | null {
-//   const buf = Buffer.from(xml);
-//   const nodePtr = symbols.parse(buf, buf.length);
-//   if (nodePtr === null) return null;
-
-//   const nodeType = symbols.node_type(nodePtr) as NodeType;
-//   const NodeClass = (nodeTypes as any)[nodeType];
-//   if (!NodeClass) {
-//     symbols.node_free(nodePtr);
-//     return null;
-//   }
-//   return new NodeClass(nodePtr);
-// }
-
-// XPath
-
-// function xpath(xpath: string, node: Node): Node | null {
-//   const buf = Buffer.from(xpath);
-//   const ptr = symbols.xpath_eval(buf, buf.length, node.ptr);
-//   if (ptr === null) return null;
-
-//   const nodeType = symbols.node_type(ptr) as NodeType;
-//   return symbols.node_type(ptr) === 1 ? new Element(ptr) : new Document(ptr)
-// }
-
-// Example usage
-// const doc = new Document();
-// console.log("doc", doc.nodeType);
-
-// const elem = new Element("div");
-// console.log('type', elem.nodeType);
-// console.log('name', elem.tagName);
-
-// console.log('attr id', elem.getAttribute('id'));
-// elem.setAttribute("id", "1");
-// console.log('attr id', elem.getAttribute('id'));
-
-// // Test parser
-// const xml = `
-// <?xml version="1.0" encoding="UTF-8"?>
-// <root id="1">
-//   <child class="test">Hello, <b>World</b>!</child>
-// </root>
-// `;
-// const parsedNode = parseXML(xml);
-// console.log('parsed node type', parsedNode?.nodeType);
-
-// // Test XPath
-// const xpathResult = parsedNode?.evaluateXPath("/root/child[@class=\"test\"]");
-// console.log('xpath result type', xpathResult?.nodeType);
+// To free resources when done
+text.free();
+elem.free();
+doc.free();

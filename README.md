@@ -8,15 +8,12 @@ A fast and efficient implemention of XML and related technologies in Zig with hi
 
     npm i @wrnrlr/xmen
     bun i @wrnrlr/xmen
+    deno i npm:@wrnrlr/xmen
 
 The APIs are the same on BunJS as on NodeJS, however the BunJS version uses `bun:ffi`.
 
-### Browser & DenoJS
+### Browser
 
-The APIs are availble in wasm
-
-
-    deno i npm:@wrnrlr/xmen
 
 ### Python
 
@@ -34,6 +31,14 @@ The APIs are availble in wasm
     [x] Parser
     [ ] Evaluator
 [ ] Namespaces & QName
+
+## Developer Instructions
+
+To build XMEN from source zig is required.
+
+    zig test src/*.zig
+    zig build
+
 
 ## Proposed JavaScript API
 
@@ -69,6 +74,9 @@ $ xmen xpath -f <URL|FILE|DIR> /library/book
 ## TODO
 
 * Maybe use [SegmentedList](https://ziglang.org/documentation/master/std/#std.segmented_list.SegmentedList) for `NodeList`.
+
+
+##
 
 ## Awesome Links
 * [Invisible XML](https://invisiblexml.org/)
