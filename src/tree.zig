@@ -7,22 +7,22 @@ pub const StringArrayHashMap = std.StringArrayHashMap;
 
 const Element = struct {
     alloc: Allocator,
-    name: [:0]const u8,
+    tagName: [:0]const u8,
     attributes: *NamedNodeMap,
     children: *NodeList,
     parent: ?*Node = null,
 
-    fn init(alloc: Allocator, tag: []const u8) !Element {
-        const name = try alloc.dupeZ(u8, tag);
+    fn init(alloc: Allocator, tagName: []const u8) !Element {
+        const name = try alloc.dupeZ(u8, tagName);
         const attrs = try alloc.create(NamedNodeMap);
         attrs.* = try NamedNodeMap.init(alloc);
         const kids = try alloc.create(NodeList);
         kids.* = NodeList.init(alloc);
-        return .{ .alloc = alloc, .name = name, .attributes = attrs, .children = kids };
+        return .{ .alloc = alloc, .tagName = name, .attributes = attrs, .children = kids };
     }
 
     fn deinit(elem: *Element) void {
-        elem.alloc.free(elem.name);
+        elem.alloc.free(elem.tagName);
         elem.children.deinit();
         elem.alloc.destroy(elem.children);
         elem.attributes.deinit();
@@ -405,16 +405,14 @@ pub const Node = union(NodeType) {
         }
     }
 
-    // Named nodes: Elem & Attr
-    pub fn getName(n: Node) [:0]const u8 {
+    // Elem
+    pub fn tagName(n: Node) [:0]const u8 {
         return switch (n) {
-            .element => |e| e.name,
-            .attribute => |a| a.name,
+            .element => |e| e.tagName,
             else => unreachable,
         };
     }
 
-    // Elem
     pub fn attributes(n: Node) *NamedNodeMap {
         return switch (n) {
             .element => |e| e.attributes,
@@ -436,7 +434,8 @@ pub const Node = union(NodeType) {
         }
     }
 
-    // Value Nodes: Attr, Text, CData, Comment, ProcInst
+    // Text, CData, Comment, ProcInst
+
     pub fn setContent(n: *Node, value: [:0]const u8) !void {
         switch (n.*) {
             .text => |*t| try t.setContent(value),
@@ -457,7 +456,15 @@ pub const Node = union(NodeType) {
         };
     }
 
-    // Value Nodes: Attr, Text, CData, Comment, ProcInst
+    // Attr
+
+    pub fn getName(n: Node) [:0]const u8 {
+        return switch (n) {
+            .attribute => |a| a.name,
+            else => unreachable,
+        };
+    }
+
     pub fn setValue(n: *Node, value: [:0]const u8) !void {
         switch (n.*) {
             .attribute => |*a| try a.setValue(value),
@@ -476,14 +483,14 @@ pub const Node = union(NodeType) {
     pub fn render(n: Node, writer: anytype) !void {
         switch (n) {
             .element => |e| {
-                try writer.print("<{s}", .{e.name});
+                try writer.print("<{s}", .{e.tagName});
                 for (e.attributes.keys(), 0..) |key, i| {
                     if (i != 0) try writer.print(" ", .{});
                     try writer.print("{s}=\"{s}\"", .{key, e.attributes.get(key).?});
                 }
                 try writer.print(">", .{});
                 for (e.children.items) |child| try child.render(writer);
-                try writer.print("</{s}>", .{e.name});
+                try writer.print("</{s}>", .{e.tagName});
             },
             .attribute => |a| try writer.print("{s}=\"{s}\"", .{a.name, a.value}),
             .text => |t| try writer.print("{s}", .{t.content}),
@@ -557,10 +564,10 @@ test "Node.parent" {
     try testing.expectEqual(null, doc.parent());
 }
 
-test "Elem.getName" {
+test "Elem.tagName" {
     var elem = try Node.Elem(testing.allocator, "div");
     defer elem.destroy();
-    try testing.expectEqualStrings("div", elem.getName());
+    try testing.expectEqualStrings("div", elem.tagName());
 }
 
 test "Elem.append" {

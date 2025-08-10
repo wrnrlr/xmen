@@ -3,20 +3,54 @@ const { i32, u8, ptr, cstring, uint64_t: usize } = FFIType;
 
 const path = `./zig-out/lib/libxmen.${suffix}`;
 const { symbols } = dlopen(path, {
-  doc_init: { args: [cstring, usize], returns: ptr },
-  elem_init: { args: [cstring, usize], returns: ptr },
+  // Constructors
+  alloc_elem: { args: [cstring, usize], returns: ptr },
+  alloc_attr: { args: [cstring, usize], returns: ptr },
+  alloc_text: { args: [cstring, usize], returns: ptr },
+  alloc_cdata: { args: [cstring, usize], returns: ptr },
+  alloc_comment: { args: [cstring, usize], returns: ptr },
+  alloc_procinst: { args: [cstring, usize], returns: ptr },
+  alloc_doc: { args: [cstring, usize], returns: ptr },
+
+  // General Node properties
   node_free: { args: [ptr], returns: i32 },
   node_type: { args: [ptr], returns: u8 },
-  tag_name: { args: [ptr], returns: cstring },
-  attr_init: { args: [cstring, usize, cstring, usize], returns: ptr },
-  attr_name: { args: [ptr], returns: cstring },
-  attr_val: { args: [ptr], returns: cstring },
-  attr_set: { args: [ptr, cstring, usize], returns: i32 },
-  attr_get: { args: [ptr, cstring, usize], returns: ptr },
-  attr_add: { args: [ptr, cstring, usize, cstring, usize], returns: ptr },
-  attr_del: { args: [ptr, cstring, usize], returns: i32 },
-  parse: { args: [cstring, usize], returns: ptr },
-  xpath_eval: { args: [cstring, usize, ptr], returns: ptr },
+  node_parent: { args: [ptr], returns: ptr },
+  node_setParent: { args: [ptr, ptr], returns: i32 },
+
+  // Inner node: Element & Document
+  inode_children: { args: [ptr], returns: ptr },
+  inode_count: { args: [ptr], returns: ptr },
+  inode_append: { args: [ptr, ptr] },
+  inode_prepend: { args: [ptr, ptr] },
+
+  // Element
+  elem_tag: { args: [ptr], returns: cstring },
+  elem_attributes: { args: [ptr] },
+  elem_getAttributes: { args: [ptr] },
+  elem_setAttributes: { args: [ptr] },
+  elem_removeAttributes: { args: [ptr] },
+
+  // Attribute
+  attr_name: { args: [ptr] },
+  attr_value: { args: [ptr] },
+  attr_getValue: { args: [ptr] },
+
+  // Text Comment CData ProcInst
+  char_content: { args: [ptr] },
+  char_setContent: {},
+
+  // NamedNodeMap
+  map_get: { args: [ptr], returns: ptr },
+  map_set: { args: [ptr] },
+  map_remove: { args: [ptr] },
+
+  // NodeList
+  list_length: { args: [ptr], returns: i32 },
+  list_index: { args: [ptr, i32], returns: ptr },
+  list_append: { args: [ptr, ptr] },
+  list_prepend: { args: [ptr, ptr] },
+
 });
 
 export enum NodeType {
@@ -44,19 +78,18 @@ export abstract class Node {
 }
 
 class Document extends Node {
-  constructor(ptr: Pointer) {
-    super(ptr || symbols.doc_init()!)
+  constructor() {
+    super(symbols.alloc_doc()!)
   }
 }
 
-function createElement(tagName: string): Element {
-  const buf = Buffer.from(tagName);
-  return new Element(symbols.elem_init(buf, buf.byteLength)!)
-}
-
 export class Element extends Node {
+  constructor(tagName: string) {
+    super(symbols.alloc_elem(tagName)!)
+  }
+
   get tagName(): string {
-    return symbols.tag_name(this.ptr).toString();
+    return symbols.elem_tag(this.ptr).toString();
   }
 
   get prefix(): string | null {
@@ -64,84 +97,78 @@ export class Element extends Node {
   }
 
   getAttribute(name: string): string | null {
-    const attr = symbols.attr_get(this.ptr, Buffer.from(name), name.length);
-    if (attr === null) return null;
-    return symbols.attr_val(attr).toString();
+    throw 'TODO'
   }
 
   getAttributeNode(): Node | null {
-    throw 'not implemented';
+    throw 'TODO'
   }
 
   setAttribute(name: string, value: string): void {
-    symbols.attr_set(this.ptr, Buffer.from(name), name.length, Buffer.from(value), value.length);
+    throw 'TODO'
   }
 
   setAttributeNode(node: Node): void {
-    throw 'not implemented';
+    throw 'TODO'
   }
 
   hasAttribute(name: string): boolean {
-    return false;
+    throw 'TODO'
   }
 }
 
 class Attr extends Node {
+  constructor(name: string, value: string) {
+    super(symbols.alloc_attr(name, value)!)
+  }
+
   get name(): string | null {
-    return symbols.attr_name(this.ptr).toString();
+    throw 'TODO'
   }
 
   get localName(): string | null {
-    return null;
+    throw 'TODO'
   }
 
   get prefix(): string | null {
-    return null;
+    throw 'TODO'
   }
 
   get value(): string {
-    return symbols.attr_val(this.ptr).toString();
+    throw 'TODO'
   }
 
   get ownerElement(): Element | null {
-    return null;
+    throw 'TODO'
   }
 
   get namespaceURI(): string | null {
-    return '';
+    throw 'TODO'
   }
 }
 
 abstract class CharacterData extends Node {
-  abstract data: string;
-  abstract readonly length: number;
-  abstract readonly nextElementSibling: Element | null;
-  abstract readonly previousElementSibling: Element | null;
-}
-
-class Text extends CharacterData {
   data: string = '';
-  get length(): number {
-    return this.data.length;
-  }
   get nextElementSibling(): Element | null {
     return null;
   }
   get previousElementSibling(): Element | null {
     return null;
+  }
+  get length(): number {
+    return this.data.length;
+  }
+}
+
+class Text extends CharacterData {
+  constructor(content: string) {
+    super(symbols.alloc_attr()!)
   }
 }
 
 class ProcessingInstruction extends CharacterData {
-  data: string = '';
-  get length(): number {
-    return this.data.length;
-  }
-  get nextElementSibling(): Element | null {
-    return null;
-  }
-  get previousElementSibling(): Element | null {
-    return null;
+  constructor(content: string) {
+    super(symbols.alloc_attr(content)!)
   }
 
   get target(): string {
@@ -150,28 +177,14 @@ class ProcessingInstruction extends CharacterData {
 }
 
 class CDATASection extends CharacterData {
-  data: string = '';
-  get length(): number {
-    return this.data.length;
-  }
-  get nextElementSibling(): Element | null {
-    return null;
-  }
-  get previousElementSibling(): Element | null {
-    return null;
+  constructor(content: string) {
+    super(symbols.alloc_cdata(content)!)
   }
 }
 
 class Comment extends CharacterData {
-  data: string = '';
-  get length(): number {
-    return this.data.length;
-  }
-  get nextElementSibling(): Element | null {
-    return null;
-  }
-  get previousElementSibling(): Element | null {
-    return null;
+  constructor(content: string) {
+    super(symbols.alloc_comment(content)!)
   }
 }
 
@@ -183,6 +196,10 @@ const nodeTypes = {
   8: Comment,
   9: Document,
 } as const;
+
+function createElement(tagName: string): Element {
+  throw 'todo';
+}
 
 // Parser
 
