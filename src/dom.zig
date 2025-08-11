@@ -91,19 +91,6 @@ pub const Node = union(NodeType) {
         };
     }
 
-    // pub fn setParent(n: *Node, m: ?*Node) void {
-    //     std.debug.assert(m == null or m.?.* == .element or m.?.* == .document or m.?.* == .attribute);
-    //     switch (n.*) {
-    //         .element => |*e| e.parent = m,
-    //         .attribute => |*a| a.parent = m,
-    //         .text => |*t| t.parent = m,
-    //         .cdata => |*c| c.parent = m,
-    //         .proc_inst => |*p| p.parent = m,
-    //         .comment => |*c| c.parent = m,
-    //         .document => undefined,
-    //     }
-    // }
-
     fn allocator(n: *Node) Allocator {
         return switch (n.*) {
             .element => |e| e.alloc,
@@ -166,7 +153,7 @@ pub const Node = union(NodeType) {
 
     // Remove a node from its current parent, if any
     fn detach(n: *Node) void {
-        std.debug.assert(n.* != .document or n.* != .attribute);
+        std.debug.assert(n.* != .document and n.* != .attribute);
         if (n.parent()) |ancestor| {
             switch (ancestor.*) {
                 .element => |*e| e.children.remove(n),
@@ -220,7 +207,20 @@ pub const Node = union(NodeType) {
 
     pub fn setAttribute(n: *Node, name: []const u8, value: []const u8) !void {
         switch (n.*) {
-            .element => |*e| try e.setAttribute(try e.alloc.dupeZ(u8, name), try e.alloc.dupeZ(u8, value)),
+            .element => |*e| {
+                // Create null-terminated copies
+                const name_z = try e.alloc.dupeZ(u8, name);
+                const value_z = try e.alloc.dupeZ(u8, value);
+                // Ensure they get freed even if setAttribute fails
+                errdefer e.alloc.free(name_z);
+                errdefer e.alloc.free(value_z);
+
+                try e.setAttribute(name_z, value_z);
+
+                // Free the temporary copies after successful call
+                e.alloc.free(name_z);
+                e.alloc.free(value_z);
+            },
             else => unreachable,
         }
     }
@@ -241,7 +241,7 @@ pub const Node = union(NodeType) {
             .cdata => |c| c.content,
             .comment => |c| c.content,
             .proc_inst => |p| p.content,
-            else => undefined,
+            else => unreachable,
         };
     }
 
@@ -255,14 +255,14 @@ pub const Node = union(NodeType) {
     pub fn setValue(n: *Node, value: [:0]const u8) !void {
         switch (n.*) {
             .attribute => |*a| try a.setValue(value),
-            else => undefined
+            else => unreachable
         }
     }
 
     pub fn getValue(n: Node) [:0]const u8 {
         return switch (n) {
             .attribute => |a| a.value,
-            else => undefined
+            else => unreachable
         };
     }
 
@@ -401,13 +401,14 @@ pub const NamedNodeMap = struct {
       std.debug.assert(new.* == .attribute);
       const attr = &new.attribute;
 
-      if (self.items.get(attr.name)) |existing| {
-          try existing.setValue(attr.value);
-          new.deinit();
-          self.alloc.destroy(new);
-      } else {
-          try self.items.put(attr.name, new);
+      if (self.items.fetchSwapRemove(attr.name)) |kv| {
+          // Remove and clean up the old attribute
+          kv.value.deinit();
+          self.alloc.destroy(kv.value);
       }
+
+      // Always add the new attribute (whether replacing or adding new)
+      try self.items.put(attr.name, new);
   }
 
   pub fn removeNamedItem(self: *NamedNodeMap, name: [:0]const u8) void {
@@ -476,16 +477,6 @@ const LiveNodeList = struct {
     fn values(self: LiveNodeList) []*Node {
         return self.list.items;
     }
-
-    // fn entries(self: LiveNodeList) !ArrayList(struct { usize, *Node }) {
-    //     var result = try ArrayList(struct { usize, *Node }).initCapacity(self.alloc, self.length());
-    //     for (0..self.length()) |i| {
-    //         if (self.item(i)) |node| {
-    //             result.appendAssumeCapacity(.{ i, node });
-    //         }
-    //     }
-    //     return result.toOwnedSlice();
-    // }
 };
 
 const StaticNodeList = struct {
@@ -551,8 +542,6 @@ const Element = struct {
     }
 
     fn setAttribute(elem: *Element, name: [:0]const u8, value: [:0]const u8) !void {
-        defer elem.alloc.free(@constCast(name[0..name.len + 1]));
-        defer elem.alloc.free(@constCast(value[0..value.len + 1]));
         if (elem.getAttribute(name)) |attr| {
             try attr.setValue(value);
         } else {
@@ -937,10 +926,12 @@ test "NamedNodeMap.setNamedItem" {
     defer map.deinit();
 
     const attr1 = try Node.Attr(testing.allocator, "id", "main");
+    // NOTE: do NOT deinit/destroy attr1 here — map takes ownership
     try map.setNamedItem(attr1);
     try testing.expectEqualStrings("main", map.getNamedItem("id").?.getValue());
 
     const attr2 = try Node.Attr(testing.allocator, "id", "content");
+    // NOTE: do NOT deinit/destroy attr2 here — map takes ownership
     try map.setNamedItem(attr2);
     try testing.expectEqualStrings("content", map.getNamedItem("id").?.getValue());
 }

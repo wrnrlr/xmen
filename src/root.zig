@@ -1,5 +1,8 @@
+// XPath FFI Interface
 const std = @import("std");
 const dom = @import("dom.zig");
+const xpath = @import("xpath.zig");
+const eval = @import("eval.zig");
 
 const Allocator = std.mem.Allocator;
 const Node = dom.Node;
@@ -11,12 +14,12 @@ const NamedNodeMap = dom.NamedNodeMap;
 
 const alloc = std.heap.page_allocator;
 
-// FFI for XML
-
 inline fn getNode(p: ?*anyopaque) ?*Node {
     if (p == null) return null;
     return @alignCast(@ptrCast(p));
 }
+
+// Node FFI
 
 pub export fn alloc_elem(tag: [*c]const u8) callconv(.C) ?*anyopaque {
     const slice = std.mem.span(tag);
@@ -84,6 +87,8 @@ pub export fn node_set_parent(p: ?*anyopaque, par_p: ?*anyopaque) callconv(.C) i
     return 0;
 }
 
+// InnerNodes FFI: Document & Element
+
 pub export fn inode_children(p: ?*anyopaque) callconv(.C) ?*anyopaque {
     const node = getNode(p) orelse return null;
     if (node.archetype() != .element and node.archetype() != .document) return null;
@@ -111,6 +116,8 @@ pub export fn inode_prepend(p: ?*anyopaque, child_p: ?*anyopaque) callconv(.C) i
     node.prepend(child) catch return -1;
     return 0;
 }
+
+// Element FFI
 
 pub export fn elem_tag(p: ?*anyopaque) callconv(.C) [*c]const u8 {
     const node = getNode(p) orelse return null;
@@ -150,6 +157,8 @@ pub export fn elem_remove_attr(p: ?*anyopaque, name: [*c]const u8) callconv(.C) 
     return 0;
 }
 
+// Attribute FFI
+
 pub export fn attr_name(p: ?*anyopaque) callconv(.C) [*c]const u8 {
     const node = getNode(p) orelse return null;
     if (node.archetype() != .attribute) return null;
@@ -170,6 +179,8 @@ pub export fn attr_set_value(p: ?*anyopaque, value: [*c]const u8) callconv(.C) i
     return 0;
 }
 
+// ContentNodes FFI: Text, Comment, CData, ProcInst
+
 pub export fn content_get(p: ?*anyopaque) callconv(.C) [*c]const u8 {
     const node = getNode(p) orelse return null;
     const typ = node.archetype();
@@ -186,57 +197,61 @@ pub export fn content_set(p: ?*anyopaque, content: [*c]const u8) callconv(.C) i3
     return 0;
 }
 
+// NamedNodeMap FFI
+
 pub export fn map_length(m_p: ?*anyopaque) callconv(.C) i32 {
-    const map:*NamedNodeMap = @alignCast(@ptrCast(m_p orelse return -1));
+    const map: *NamedNodeMap = @alignCast(@ptrCast(m_p orelse return -1));
     return @intCast(map.length());
 }
 
 pub export fn map_item(m_p: ?*anyopaque, index: i32) callconv(.C) ?*anyopaque {
-    const map:*NamedNodeMap = @alignCast(@ptrCast(m_p orelse return null));
+    const map: *NamedNodeMap = @alignCast(@ptrCast(m_p orelse return null));
     if (index < 0) return null;
     return @ptrCast(map.item(@intCast(index)) orelse return null);
 }
 
 pub export fn map_get(m_p: ?*anyopaque, name: [*c]const u8) callconv(.C) ?*anyopaque {
-    const map:*NamedNodeMap = @alignCast(@ptrCast(m_p orelse return null));
+    const map: *NamedNodeMap = @alignCast(@ptrCast(m_p orelse return null));
     const slice = std.mem.span(name);
     return @ptrCast(map.getNamedItem(slice) orelse return null);
 }
 
 pub export fn map_set(m_p: ?*anyopaque, item_p: ?*anyopaque) callconv(.C) i32 {
-    const map:*NamedNodeMap = @alignCast(@ptrCast(m_p orelse return -1));
+    const map: *NamedNodeMap = @alignCast(@ptrCast(m_p orelse return -1));
     const item = getNode(item_p) orelse return -1;
     map.setNamedItem(item) catch return -1;
     return 0;
 }
 
 pub export fn map_remove(m_p: ?*anyopaque, name: [*c]const u8) callconv(.C) i32 {
-    const map:*NamedNodeMap = @alignCast(@ptrCast(m_p orelse return -1));
+    const map: *NamedNodeMap = @alignCast(@ptrCast(m_p orelse return -1));
     const slice = std.mem.span(name);
     map.removeNamedItem(slice);
     return 0;
 }
 
+// NodeList FFI
+
 pub export fn list_length(l_p: ?*anyopaque) callconv(.C) i32 {
-    const list:*NodeList = @alignCast(@ptrCast(l_p orelse return -1));
+    const list: *NodeList = @alignCast(@ptrCast(l_p orelse return -1));
     return @intCast(list.length());
 }
 
 pub export fn list_item(l_p: ?*anyopaque, index: i32) callconv(.C) ?*anyopaque {
-    const list:*NodeList = @alignCast(@ptrCast(l_p orelse return null));
+    const list: *NodeList = @alignCast(@ptrCast(l_p orelse return null));
     if (index < 0) return null;
     return @ptrCast(list.item(@intCast(index)) orelse return null);
 }
 
 pub export fn list_append(l_p: ?*anyopaque, item_p: ?*anyopaque) callconv(.C) i32 {
-    const list:*NodeList = @alignCast(@ptrCast(l_p orelse return -1));
+    const list: *NodeList = @alignCast(@ptrCast(l_p orelse return -1));
     const item = getNode(item_p) orelse return -1;
     list.append(item) catch return -1;
     return 0;
 }
 
 pub export fn list_prepend(l_p: ?*anyopaque, item_p: ?*anyopaque) callconv(.C) i32 {
-    const list:*NodeList = @alignCast(@ptrCast(l_p orelse return -1));
+    const list: *NodeList = @alignCast(@ptrCast(l_p orelse return -1));
     const item = getNode(item_p) orelse return -1;
     list.insert(0, item) catch return -1;
     return 0;
@@ -244,18 +259,17 @@ pub export fn list_prepend(l_p: ?*anyopaque, item_p: ?*anyopaque) callconv(.C) i
 
 // FFI for Sax
 
-// Add these imports to the existing ffi.zig file
-const xpath_parser = @import("xpath.zig");
-const eval = @import("eval.zig");
+// TODO
 
-// Add this function to the existing FFI functions in ffi.zig
+// XPath
 
+// Take xpath as astring and evaluate it against the context_node
 pub export fn xpath_eval(xpath_str: [*c]const u8, context_node: ?*anyopaque) callconv(.C) ?*anyopaque {
     const node = getNode(context_node) orelse return null;
     const xpath_slice = std.mem.span(xpath_str);
 
     // Parse the XPath expression
-    var parser = xpath_parser.XPathParser.init(alloc);
+    var parser = xpath.XPathParser.init(alloc);
     const ast = parser.parse(xpath_slice) catch return null;
     defer {
         ast.deinit(alloc);
@@ -264,39 +278,20 @@ pub export fn xpath_eval(xpath_str: [*c]const u8, context_node: ?*anyopaque) cal
 
     // Evaluate the XPath against the context node
     var evaluator = eval.XPathEvaluator.init(alloc);
-    var result = evaluator.evaluate(node, ast) catch return null;
-
-    // Create a new NodeList to return the results
-    const result_list = alloc.create(dom.NodeList) catch {
-        result.deinit();
+    const result_val = evaluator.evaluate(node, ast) catch return null;
+    const result = alloc.create(dom.NodeList) catch {
+        std.debug.print("Hello\n", .{});
+        // result_val.deinit();
         return null;
     };
-    result_list.* = dom.NodeList.init(alloc);
-
-    // Copy the result nodes to the new NodeList
-    for (result.nodes.items) |result_node| {
-        result_list.append(result_node) catch {
-            result.deinit();
-            result_list.deinit();
-            alloc.destroy(result_list);
-            return null;
-        };
-    }
-
-    // Clean up the XPath result (but not the nodes themselves, as they're owned by the DOM)
-    result.deinit();
-
-    return @ptrCast(result_list);
+    result.* = result_val;
+    return @ptrCast(result);
 }
 
 // Helper function to free XPath result NodeList
 pub export fn xpath_result_free(result_list: ?*anyopaque) callconv(.C) i32 {
     const list: *dom.NodeList = @alignCast(@ptrCast(result_list orelse return -1));
-
-    // Note: We don't call deinit() on the NodeList because that would destroy
-    // the nodes themselves, which are owned by the original DOM tree.
-    // Instead, we just free the list structure and its internal ArrayList.
-    list.list.deinit();
+    list.deinit();
     alloc.destroy(list);
     return 0;
 }
