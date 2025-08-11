@@ -70,6 +70,14 @@ const State = enum {
     IgnoreCdata,
 };
 
+pub const ParseError = error{
+    UnexpectedEndOfInput,
+    InvalidCharacter,
+    UnterminatedString,
+    MalformedEntity,
+    AttributeLimitExceeded
+};
+
 pub const SaxParser = struct {
     allocator: Allocator,
     buffer: []const u8,
@@ -107,6 +115,128 @@ pub const SaxParser = struct {
         self.attributes.deinit();
     }
 
+    // Simplified write function using helpers
+    pub fn write(self: *SaxParser, input: []const u8) ParseError!void {
+        self.buffer = input;
+        self.pos = 0;
+        var record_start: usize = 0;
+        var quote_char: ?u8 = null;
+
+        while (self.pos < self.buffer.len) : (self.pos += 1) {
+            const c = self.buffer[self.pos];
+
+            switch (self.state) {
+                .Text => {
+                    if (c == '<') {
+                        // Emit any accumulated text
+                        if (self.pos > record_start) {
+                            try self.emitText(record_start, self.pos, .text);
+                        }
+
+                        self.tag_start_byte = self.pos;
+                        self.state = self.detectSpecialConstruct();
+                        self.end_tag = false;
+                        self.self_closing = false;
+                        record_start = self.pos + 1;
+                    }
+                },
+                .IgnoreComment => {
+                    if (try self.tryCompleteComment(record_start)) {
+                        record_start = self.pos + 1;
+                    }
+                },
+                .IgnoreInstruction => {
+                    if (try self.tryCompleteProcessingInstruction(record_start)) {
+                        record_start = self.pos + 1;
+                    }
+                },
+                .Cdata => {
+                    if (try self.tryCompleteCdata(record_start)) {
+                        record_start = self.pos + 1;
+                    }
+                },
+                .TagName => {
+                    if (isWhitespace(c)) {
+                        self.tag_name = self.buffer[record_start..self.pos];
+                        self.state = .Tag;
+                        record_start = self.pos + 1;
+                    } else if (c == '/') {
+                        if (try self.handleSelfClosingTag()) {
+                            record_start = self.pos + 1;
+                        }
+                    } else if (c == '>') {
+                        self.tag_name = self.buffer[record_start..self.pos];
+                        try self.completeTag();
+                        record_start = self.pos + 1;
+                    }
+                },
+                .Tag => {
+                    if (c == '>') {
+                        try self.completeTag();
+                        record_start = self.pos + 1;
+                    } else if (!isWhitespace(c)) {
+                        self.state = .AttrName;
+                        record_start = self.pos;
+                    }
+                },
+                .AttrName => {
+                    if (c == '=') {
+                        self.attr_name = self.buffer[record_start..self.pos];
+                        self.state = .AttrEq;
+                        record_start = self.pos + 1;
+                    } else if (isWhitespace(c) or c == '>') {
+                        self.attr_name = self.buffer[record_start..self.pos];
+                        try self.addAttribute(self.attr_name, "");
+                        self.state = .Tag;
+                        record_start = self.pos + 1;
+                        if (c == '>') {
+                            self.pos -= 1; // Reprocess '>' in Tag state
+                        }
+                    } else if (c == '/') {
+                        if (try self.handleSelfClosingTag()) {
+                            record_start = self.pos + 1;
+                        }
+                    }
+                },
+                .AttrEq => {
+                    if (c == '"' or c == '\'') {
+                        quote_char = c;
+                        self.state = .AttrQuot;
+                        record_start = self.pos + 1;
+                    } else if (!isWhitespace(c)) {
+                        // Unquoted attribute value (non-standard but sometimes seen)
+                        self.state = .AttrValue;
+                        record_start = self.pos;
+                    }
+                },
+                .AttrQuot => {
+                    if (c == quote_char) {
+                        self.attr_value = self.buffer[record_start..self.pos];
+                        try self.addAttribute(self.attr_name, self.attr_value);
+                        self.state = .Tag;
+                        record_start = self.pos + 1;
+                        quote_char = null;
+                    }
+                },
+                .AttrValue => {
+                    if (isWhitespace(c) or c == '>' or c == '/') {
+                        self.attr_value = self.buffer[record_start..self.pos];
+                        try self.addAttribute(self.attr_name, self.attr_value);
+                        self.state = .Tag;
+                        record_start = self.pos + 1;
+                        if (c == '>' or c == '/') {
+                            self.pos -= 1; // Reprocess in Tag state
+                        }
+                    }
+                },
+                .IgnoreCdata => {
+                    // This state is not used in the current implementation
+                    // but could be used for ignoring CDATA sections
+                },
+            }
+        }
+    }
+
     fn get_position(self: *SaxParser, byte_pos: usize) Position {
         var line: u64 = 1;
         var char: u64 = 1;
@@ -126,297 +256,198 @@ pub const SaxParser = struct {
         return Position{ .line = line, .char = char };
     }
 
-    pub fn write(self: *SaxParser, input: []const u8) !void {
-        self.buffer = input;
-        self.pos = 0;
-        var record_start: usize = 0;
-        var quote_char: ?u8 = null;
+    fn emitOpenTag(self: *SaxParser) ParseError!void {
+        const tag_header = [_]usize{ self.tag_start_byte, self.pos + 1 };
+        const open_tag = Tag{
+            .name = self.tag_name.ptr,
+            .name_len = self.tag_name.len,
+            .attributes = if (self.attributes.items.len > 0) self.attributes.items.ptr else null,
+            .attributes_len = self.attributes.items.len,
+            .start = self.get_position(self.tag_start_byte),
+            .end = self.get_position(self.pos),
+            .header = tag_header,
+        };
 
-        while (self.pos < self.buffer.len) : (self.pos += 1) {
-            const c = self.buffer[self.pos];
-
-            switch (self.state) {
-                .Text => {
-                    if (c == '<') {
-                        if (self.pos > record_start) {
-                            const text_header = [_]usize{ record_start, self.pos };
-                            const text_value = self.buffer[text_header[0]..text_header[1]];
-                            const text_entity = Text{
-                                .value = text_value.ptr,
-                                .header = text_header,
-                                .start = self.get_position(text_header[0]),
-                                .end = self.get_position(self.pos - 1),
-                            };
-                            const entity = Entity{ .tag = .text, .data = .{ .text = text_entity } };
-                            if (self.on_event != null) {
-                                self.on_event.?(self.context, entity);
-                            }
-                        }
-                        self.tag_start_byte = self.pos;
-                        self.state = if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '!') .IgnoreComment
-                                      else if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '?') .IgnoreInstruction
-                                      else .TagName;
-                        self.end_tag = false;
-                        self.self_closing = false;
-                        record_start = self.pos + 1;
-                        if (self.state == .IgnoreComment and self.pos + 3 < self.buffer.len and
-                            std.mem.eql(u8, self.buffer[self.pos + 1 .. self.pos + 4], "!--"))
-                        {
-                            self.pos += 3;
-                            record_start = self.pos + 1; // Start recording after <!--
-                        } else if (self.state == .IgnoreInstruction and self.pos + 1 < self.buffer.len and
-                            self.buffer[self.pos + 1] == '?')
-                        {
-                            self.pos += 1;
-                            record_start = self.pos + 1;
-                        } else if (self.state == .TagName and self.pos + 1 < self.buffer.len and
-                            self.buffer[self.pos + 1] == '/')
-                        {
-                            self.end_tag = true;
-                            self.pos += 1;
-                            record_start = self.pos + 1;
-                        } else if (self.state == .IgnoreComment and self.pos + 8 < self.buffer.len and
-                            std.mem.eql(u8, self.buffer[self.pos + 1 .. self.pos + 9], "![CDATA["))
-                        {
-                            self.state = .Cdata;
-                            self.pos += 8;
-                            record_start = self.pos + 1;
-                        }
-                    }
-                },
-                .IgnoreComment => {
-                    if (self.pos + 2 < self.buffer.len and
-                        std.mem.eql(u8, self.buffer[self.pos .. self.pos + 3], "-->"))
-                    {
-                        const comment_header = [_]usize{ record_start, self.pos };
-                        const comment_value = self.buffer[comment_header[0]..comment_header[1]];
-                        const comment_entity = Text{
-                            .value = comment_value.ptr,
-                            .start = self.get_position(comment_header[0]),
-                            .end = self.get_position(self.pos - 1),
-                            .header = comment_header,
-                        };
-                        const entity = Entity{ .tag = .comment, .data = .{ .comment = comment_entity } };
-                        if (self.on_event != null) {
-                            self.on_event.?(self.context, entity);
-                        }
-                        self.pos += 2;
-                        self.state = .Text;
-                        record_start = self.pos + 1;
-                    }
-                },
-                .IgnoreInstruction => {
-                    if (self.pos + 1 < self.buffer.len and
-                        std.mem.eql(u8, self.buffer[self.pos .. self.pos + 2], "?>"))
-                    {
-                        const pi_header = [_]usize{ record_start, self.pos };
-                        const pi_value = self.buffer[pi_header[0]..pi_header[1]];
-                        const pi_entity = Text{
-                            .value = pi_value.ptr,
-                            .start = self.get_position(pi_header[0]),
-                            .end = self.get_position(self.pos - 1),
-                            .header = pi_header,
-                        };
-                        const entity = Entity{ .tag = .processing_instruction, .data = .{ .processing_instruction = pi_entity } };
-                        if (self.on_event != null) {
-                            self.on_event.?(self.context, entity);
-                        }
-                        self.pos += 1;
-                        self.state = .Text;
-                        record_start = self.pos + 1;
-                    }
-                },
-                .TagName => {
-                    if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
-                        self.tag_name = self.buffer[record_start..self.pos];
-                        self.state = .Tag;
-                        record_start = self.pos + 1;
-                    } else if (c == '/') {
-                        if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '>') {
-                            self.self_closing = true;
-                            self.tag_name = self.buffer[record_start..self.pos];
-                            self.pos += 1;
-                            const tag_header = [_]usize{self.tag_start_byte, self.pos + 1};
-                            const open_tag = Tag{
-                                .name = self.tag_name.ptr,
-                                .name_len = self.tag_name.len,
-                                .attributes = if (self.attributes.items.len > 0) self.attributes.items.ptr else null,
-                                .attributes_len = self.attributes.items.len,
-                                .start = self.get_position(self.tag_start_byte),
-                                .end = self.get_position(self.pos),
-                                .header = tag_header,
-                            };
-                            const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
-                            if (self.on_event != null) {
-                                self.on_event.?(self.context, entity);
-                            }
-                            self.attributes.clearRetainingCapacity();
-                            self.state = .Text;
-                            record_start = self.pos + 1;
-                        }
-                    } else if (c == '>') {
-                        self.tag_name = self.buffer[record_start..self.pos];
-                        const tag_header = [_]usize{self.tag_start_byte, self.pos + 1};
-                        const start = self.get_position(self.tag_start_byte);
-                        const end = self.get_position(self.pos);
-                        if (self.end_tag) {
-                            const close_tag = Tag{
-                                .name = self.tag_name.ptr,
-                                .name_len = self.tag_name.len,
-                                .attributes = null,
-                                .attributes_len = 0,
-                                .start = start,
-                                .end = end,
-                                .header = tag_header,
-                            };
-                            const entity = Entity{ .tag = .close_tag, .data = .{ .close_tag = close_tag } };
-                            if (self.on_event != null) {
-                                self.on_event.?(self.context, entity);
-                            }
-                        } else {
-                            const open_tag = Tag{
-                                .name = self.tag_name.ptr,
-                                .name_len = self.tag_name.len,
-                                .attributes = if (self.attributes.items.len > 0) self.attributes.items.ptr else null,
-                                .attributes_len = self.attributes.items.len,
-                                .start = start,
-                                .end = end,
-                                .header = tag_header,
-                            };
-                            const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
-                            if (self.on_event != null) {
-                                self.on_event.?(self.context, entity);
-                            }
-                        }
-                        self.attributes.clearRetainingCapacity();
-                        self.state = .Text;
-                        record_start = self.pos + 1;
-                    }
-                },
-                .Tag => {
-                    if (c == '>') {
-                        const tag_header = [_]usize{ self.tag_start_byte, self.pos + 1 };
-                        const start = self.get_position(self.tag_start_byte);
-                        const end = self.get_position(self.pos);
-                        if (self.end_tag) {
-                            const close_tag = Tag{
-                                .name = self.tag_name.ptr,
-                                .name_len = self.tag_name.len,
-                                .attributes = null,
-                                .attributes_len = 0,
-                                .start = start,
-                                .end = end,
-                                .header = tag_header,
-                            };
-                            const entity = Entity{ .tag = .close_tag, .data = .{ .close_tag = close_tag } };
-                            if (self.on_event != null) self.on_event.?(self.context, entity);
-                        } else {
-                            const open_tag = Tag{
-                                .name = self.tag_name.ptr,
-                                .name_len = self.tag_name.len,
-                                .attributes = if (self.attributes.items.len > 0) self.attributes.items.ptr else null,
-                                .attributes_len = self.attributes.items.len,
-                                .start = start,
-                                .end = end,
-                                .header = tag_header,
-                            };
-                            const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
-                            if (self.on_event != null) self.on_event.?(self.context, entity);
-                        }
-                        self.attributes.clearRetainingCapacity();
-                        self.state = .Text;
-                        record_start = self.pos + 1;
-                    } else if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
-                        self.state = .AttrName;
-                        record_start = self.pos;
-                    }
-                },
-                .AttrName => {
-                    if (c == '=') {
-                        self.attr_name = self.buffer[record_start..self.pos];
-                        self.state = .AttrEq;
-                        record_start = self.pos + 1;
-                    } else if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '>') {
-                        self.attr_name = self.buffer[record_start..self.pos];
-                        if (self.attr_name.len > 0 and !std.mem.eql(u8, self.attr_name, "/")) {
-                            self.attributes.append(.{
-                                .name = self.attr_name.ptr,
-                                .name_len = self.attr_name.len,
-                                .value = "",
-                                .value_len = 0,
-                            }) catch {};
-                        }
-                        self.state = .Tag;
-                        record_start = self.pos + 1;
-                        if (c == '>') {
-                            self.pos -= 1;
-                        }
-                    } else if (c == '/') {
-                        if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '>') {
-                            self.self_closing = true;
-                            self.state = .Tag;
-                            record_start = self.pos + 1;
-                        } else {
-                            self.attr_name = self.buffer[record_start..self.pos];
-                            if (self.attr_name.len > 0 and !std.mem.eql(u8, self.attr_name, "/")) {
-                                self.attributes.append(.{
-                                    .name = self.attr_name.ptr,
-                                    .name_len = self.attr_name.len,
-                                    .value = "",
-                                    .value_len = 0,
-                                }) catch {};
-                            }
-                            self.state = .Tag;
-                            record_start = self.pos + 1;
-                        }
-                    }
-                },
-                .AttrEq => {
-                    if (c == '"' or c == '\'') {
-                        quote_char = c;
-                        self.state = .AttrQuot;
-                        record_start = self.pos + 1;
-                    }
-                },
-                .AttrQuot => {
-                    if (c == quote_char) {
-                        self.attr_value = self.buffer[record_start..self.pos];
-                        self.attributes.append(.{
-                            .name = self.attr_name.ptr,
-                            .name_len = self.attr_name.len,
-                            .value = self.attr_value.ptr,
-                            .value_len = self.attr_value.len,
-                        }) catch {};
-                        self.state = .Tag;
-                        record_start = self.pos + 1;
-                        quote_char = null;
-                    }
-                },
-                .AttrValue => {},
-                .Cdata => {
-                    if (self.pos + 2 < self.buffer.len and
-                        std.mem.eql(u8, self.buffer[self.pos .. self.pos + 3], "]]>"))
-                    {
-                        const cdata_header = [_]usize{ record_start, self.pos };
-                        const cdata_value = self.buffer[cdata_header[0]..cdata_header[1]];
-                        const cdata_entity = Text{
-                            .value = cdata_value.ptr,
-                            .start = self.get_position(cdata_header[0]),
-                            .end = self.get_position(self.pos - 1),
-                            .header = cdata_header,
-                        };
-                        const entity = Entity{ .tag = .cdata, .data = .{ .cdata = cdata_entity } };
-                        if (self.on_event != null) {
-                            self.on_event.?(self.context, entity);
-                        }
-                        self.pos += 2;
-                        self.state = .Text;
-                        record_start = self.pos + 1;
-                    }
-                },
-                .IgnoreCdata => {},
-            }
+        const entity = Entity{ .tag = .open_tag, .data = .{ .open_tag = open_tag } };
+        if (self.on_event) |callback| {
+            callback(self.context, entity);
         }
+
+        self.attributes.clearRetainingCapacity();
+    }
+
+    // Helper function to emit close tag events
+    fn emitCloseTag(self: *SaxParser) ParseError!void {
+        const tag_header = [_]usize{ self.tag_start_byte, self.pos + 1 };
+        const close_tag = Tag{
+            .name = self.tag_name.ptr,
+            .name_len = self.tag_name.len,
+            .attributes = null,
+            .attributes_len = 0,
+            .start = self.get_position(self.tag_start_byte),
+            .end = self.get_position(self.pos),
+            .header = tag_header,
+        };
+
+        const entity = Entity{ .tag = .close_tag, .data = .{ .close_tag = close_tag } };
+        if (self.on_event) |callback| {
+            callback(self.context, entity);
+        }
+    }
+
+    // Helper function to emit text events
+    fn emitText(self: *SaxParser, start_pos: usize, end_pos: usize, entity_type: EntityType) ParseError!void {
+        if (end_pos <= start_pos) return; // No content to emit
+
+        const text_header = [_]usize{ start_pos, end_pos };
+        const text_value = self.buffer[text_header[0]..text_header[1]];
+        const text_entity = Text{
+            .value = text_value.ptr,
+            .header = text_header,
+            .start = self.get_position(text_header[0]),
+            .end = self.get_position(end_pos - 1),
+        };
+
+        const entity = Entity{
+            .tag = entity_type,
+            .data = switch (entity_type) {
+                .text => .{ .text = text_entity },
+                .comment => .{ .comment = text_entity },
+                .cdata => .{ .cdata = text_entity },
+                .processing_instruction => .{ .processing_instruction = text_entity },
+                else => return ParseError.InvalidCharacter,
+            }
+        };
+
+        if (self.on_event) |callback| {
+            callback(self.context, entity);
+        }
+    }
+
+    // Helper function to handle tag completion (both open and close)
+    fn completeTag(self: *SaxParser) ParseError!void {
+        if (self.end_tag) {
+            try self.emitCloseTag();
+        } else {
+            try self.emitOpenTag();
+        }
+
+        self.state = .Text;
+        return;
+    }
+
+    // Helper function to add an attribute safely
+    fn addAttribute(self: *SaxParser, name: []const u8, value: []const u8) ParseError!void {
+        // Check attribute limits to prevent DoS
+        const MAX_ATTRIBUTES = 1000;
+        if (self.attributes.items.len >= MAX_ATTRIBUTES) {
+            return ParseError.AttributeLimitExceeded;
+        }
+
+        // Skip invalid attributes (like lone "/" in self-closing tags)
+        if (name.len == 0 or std.mem.eql(u8, name, "/")) {
+            return;
+        }
+
+        self.attributes.append(.{
+            .name = name.ptr,
+            .name_len = name.len,
+            .value = value.ptr,
+            .value_len = value.len,
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return ParseError.AttributeLimitExceeded,
+        };
+    }
+
+    // Helper function to handle comment end detection
+    fn tryCompleteComment(self: *SaxParser, record_start: usize) ParseError!bool {
+        if (self.pos + 2 >= self.buffer.len) return false;
+
+        if (std.mem.eql(u8, self.buffer[self.pos .. self.pos + 3], "-->")) {
+            try self.emitText(record_start, self.pos, .comment);
+            self.pos += 2; // Skip the remaining "-->"
+            self.state = .Text;
+            return true;
+        }
+        return false;
+    }
+
+    // Helper function to handle processing instruction end
+    fn tryCompleteProcessingInstruction(self: *SaxParser, record_start: usize) ParseError!bool {
+        if (self.pos + 1 >= self.buffer.len) return false;
+
+        if (std.mem.eql(u8, self.buffer[self.pos .. self.pos + 2], "?>")) {
+            try self.emitText(record_start, self.pos, .processing_instruction);
+            self.pos += 1; // Skip the remaining "?>"
+            self.state = .Text;
+            return true;
+        }
+        return false;
+    }
+
+    // Helper function to handle CDATA end detection
+    fn tryCompleteCdata(self: *SaxParser, record_start: usize) ParseError!bool {
+        if (self.pos + 2 >= self.buffer.len) return false;
+
+        if (std.mem.eql(u8, self.buffer[self.pos .. self.pos + 3], "]]>")) {
+            try self.emitText(record_start, self.pos, .cdata);
+            self.pos += 2; // Skip the remaining "]]>"
+            self.state = .Text;
+            return true;
+        }
+        return false;
+    }
+
+    // Helper function to check if character is whitespace
+    inline fn isWhitespace(c: u8) bool {
+        return c == ' ' or c == '\t' or c == '\n' or c == '\r';
+    }
+
+    // Helper function to handle self-closing tag detection
+    fn handleSelfClosingTag(self: *SaxParser) ParseError!bool {
+        if (self.pos + 1 >= self.buffer.len) return false;
+
+        if (self.buffer[self.pos + 1] == '>') {
+            self.self_closing = true;
+            self.pos += 1; // Skip the '>'
+            try self.emitOpenTag();
+            self.state = .Text;
+            return true;
+        }
+        return false;
+    }
+
+    // Helper function to detect and handle special XML constructs
+    fn detectSpecialConstruct(self: *SaxParser) State {
+        // Check for comments
+        if (self.pos + 3 < self.buffer.len and
+            std.mem.eql(u8, self.buffer[self.pos + 1 .. self.pos + 4], "!--")) {
+            self.pos += 3; // Skip "!--"
+            return .IgnoreComment;
+        }
+
+        // Check for CDATA
+        if (self.pos + 8 < self.buffer.len and
+            std.mem.eql(u8, self.buffer[self.pos + 1 .. self.pos + 9], "![CDATA[")) {
+            self.pos += 8; // Skip "![CDATA["
+            return .Cdata;
+        }
+
+        // Check for processing instructions
+        if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '?') {
+            self.pos += 1; // Skip "?"
+            return .IgnoreInstruction;
+        }
+
+        // Check for closing tag
+        if (self.pos + 1 < self.buffer.len and self.buffer[self.pos + 1] == '/') {
+            self.end_tag = true;
+            self.pos += 1; // Skip "/"
+            return .TagName;
+        }
+
+        // Regular opening tag
+        return .TagName;
     }
 };
 
