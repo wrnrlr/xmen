@@ -536,6 +536,9 @@ const Element = struct {
     }
 
     fn deinit(elem: *Element) void {
+        for (elem.children.values()) |child| {
+            child.destroy();
+        }
         elem.alloc.free(elem.tagName);
         elem.children.deinit();
         elem.alloc.destroy(elem.children);
@@ -617,6 +620,9 @@ const Document = struct {
     }
 
     fn deinit(doc: *Document) void {
+        for (doc.children.values()) |child| {
+            child.destroy();
+        }
         doc.children.deinit();
         doc.alloc.destroy(doc.children);
     }
@@ -850,7 +856,9 @@ test "LiveNodeList.item" {
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
+    defer node1.destroy();
     const node2 = try Node.Text(testing.allocator, "Hello");
+    defer node2.destroy();
     try list.append(node1);
     try list.append(node2);
 
@@ -864,7 +872,9 @@ test "LiveNodeList.keys" {
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
+    defer node1.destroy();
     const node2 = try Node.Text(testing.allocator, "Hello");
+    defer node2.destroy();
     try list.append(node1);
     try list.append(node2);
 
@@ -878,7 +888,9 @@ test "LiveNodeList.values" {
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
+    defer node1.destroy();
     const node2 = try Node.Text(testing.allocator, "Hello");
+    defer node2.destroy();
     try list.append(node1);
     try list.append(node2);
 
@@ -891,7 +903,9 @@ test "LiveNodeList.entries" {
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
+    defer node1.destroy();
     const node2 = try Node.Text(testing.allocator, "Hello");
+    defer node2.destroy();
     try list.append(node1);
     try list.append(node2);
 
