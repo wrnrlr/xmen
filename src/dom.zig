@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const ArrayList = std.ArrayList;
+pub const SegmentedList = std.SegmentedList;
 pub const StringArrayHashMap = std.StringArrayHashMap;
 
 pub const NodeType = enum(u8) {
@@ -90,18 +91,18 @@ pub const Node = union(NodeType) {
         };
     }
 
-    pub fn setParent(n: *Node, m: ?*Node) void {
-        std.debug.assert(m == null or m.?.* == .element or m.?.* == .document or m.?.* == .attribute);
-        switch (n.*) {
-            .element => |*e| e.parent = m,
-            .attribute => |*a| a.parent = m,
-            .text => |*t| t.parent = m,
-            .cdata => |*c| c.parent = m,
-            .proc_inst => |*p| p.parent = m,
-            .comment => |*c| c.parent = m,
-            .document => undefined,
-        }
-    }
+    // pub fn setParent(n: *Node, m: ?*Node) void {
+    //     std.debug.assert(m == null or m.?.* == .element or m.?.* == .document or m.?.* == .attribute);
+    //     switch (n.*) {
+    //         .element => |*e| e.parent = m,
+    //         .attribute => |*a| a.parent = m,
+    //         .text => |*t| t.parent = m,
+    //         .cdata => |*c| c.parent = m,
+    //         .proc_inst => |*p| p.parent = m,
+    //         .comment => |*c| c.parent = m,
+    //         .document => undefined,
+    //     }
+    // }
 
     fn allocator(n: *Node) Allocator {
         return switch (n.*) {
@@ -143,8 +144,29 @@ pub const Node = union(NodeType) {
         };
     }
 
+    pub fn setParent(n: *Node, m: ?*Node) void {
+        // std.debug.assert(m == null or m.?.* == .element or m.?.* == .document or m.?.* == .attribute);
+        if (n.parent()) |ancestor| {
+            switch (ancestor.*) {
+                .element => |*e| e.children.remove(n),
+                .document => |*d| d.children.remove(n),
+                else => unreachable,
+            }
+        }
+        switch (n.*) {
+            .element => |*e| e.parent = m,
+            .attribute => |*a| a.parent = m,
+            .text => |*t| t.parent = m,
+            .cdata => |*c| c.parent = m,
+            .proc_inst => |*p| p.parent = m,
+            .comment => |*c| c.parent = m,
+            .document => undefined,
+        }
+    }
+
     // Remove a node from its current parent, if any
     fn detach(n: *Node) void {
+        std.debug.assert(n.* != .document or n.* != .attribute);
         if (n.parent()) |ancestor| {
             switch (ancestor.*) {
                 .element => |*e| e.children.remove(n),
@@ -156,8 +178,7 @@ pub const Node = union(NodeType) {
     }
 
     pub fn append(n: *Node, child: *Node) !void {
-        std.debug.assert(child.* != .document or child.* != .attribute);
-        child.detach();
+        // child.detach();
         child.setParent(n);
         switch (n.*) {
             .element => |*e| try e.children.append(child),
@@ -167,8 +188,7 @@ pub const Node = union(NodeType) {
     }
 
     pub fn prepend(n: *Node, child: *Node) !void {
-        std.debug.assert(child.* != .document or child.* != .attribute);
-        child.detach();
+        // child.detach();
         child.setParent(n);
         switch (n.*) {
             .element => |*e| try e.children.insert(0, child),
@@ -271,68 +291,90 @@ pub const Node = union(NodeType) {
     }
 };
 
-pub const NodeList = struct {
-  alloc: Allocator,
-  list: ArrayList(*Node),
+// NodeList objects are collections of nodes, usually returned by properties such as Node.children or XPathEvaluator.evaluate.
+pub const NodeList = union(enum) {
+    live: LiveNodeList,
+    static: StaticNodeList,
 
-  pub fn init(alloc: Allocator) NodeList {
-      return .{ .alloc = alloc, .list = ArrayList(*Node).init(alloc) };
-  }
+    pub fn initLive(alloc: Allocator) NodeList {
+        return .{ .live = LiveNodeList.init(alloc) };
+    }
 
-  pub fn deinit(self: *NodeList) void {
-      for (self.list.items) |child| {
-          child.deinit();
-          self.alloc.destroy(child);
-      }
-      self.list.deinit();
-  }
+    pub fn initStatic(alloc: Allocator, nodes: []*Node) !NodeList {
+        return .{ .static = try StaticNodeList.init(alloc, nodes) };
+    }
 
-  pub fn item(self: *NodeList, index: usize) ?*Node {
-      return if (index < self.list.items.len) self.list.items[index] else null;
-  }
+    pub fn deinit(self: *NodeList) void {
+        switch (self.*) {
+            .live => |*live| live.deinit(),
+            .static => |*stat| stat.deinit(),
+        }
+    }
 
-  pub fn append(self: *NodeList, node: *Node) !void {
-      try self.list.append(node);
-  }
+    pub fn item(self: NodeList, index: usize) ?*Node {
+        return switch (self) {
+            .live => |live| live.item(index),
+            .static => |stat| stat.item(index),
+        };
+    }
 
-  pub fn insert(self: *NodeList, index: usize, node: *Node) !void {
-      try self.list.insert(index, node);
-  }
+    pub fn append(self: *NodeList, node: *Node) !void {
+        switch (self.*) {
+            .live => |*live| try live.append(node),
+            .static => return error.CannotModifyStaticNodeList,
+        }
+    }
 
-  pub fn remove(self: *NodeList, discarded: *Node) void {
-      for (self.list.items, 0..) |child, i| {
-          if (child == discarded) {
-              _ = self.list.orderedRemove(i);
-              break;
-          }
-      }
-  }
+    pub fn insert(self: *NodeList, index: usize, node: *Node) !void {
+        switch (self.*) {
+            .live => |*live| try live.insert(index, node),
+            .static => return error.CannotModifyStaticNodeList,
+        }
+    }
 
-  pub fn length(self: *NodeList) usize {
-      return self.list.items.len;
-  }
+    pub fn remove(self: *NodeList, node: *Node) void {
+        switch (self.*) {
+            .live => |*live| live.remove(node),
+            .static => return, // Cannot modify static list
+        }
+    }
 
-  fn keys(self: *NodeList) []const usize {
-      var indices = std.ArrayList(usize).init(self.alloc);
-      defer indices.deinit();
-      for (0..self.list.items.len) |i| {
-          indices.append(i) catch return &.{};
-      }
-      return indices.toOwnedSlice() catch &.{};
-  }
+    pub fn length(self: NodeList) usize {
+        return switch (self) {
+            .live => |live| live.length(),
+            .static => |stat| stat.length(),
+        };
+    }
 
-  pub fn values(self: *NodeList) []*Node {
-      return self.list.items;
-  }
+    pub fn values(self: NodeList) []*Node {
+        return switch (self) {
+            .live => |live| live.values(),
+            .static => |stat| @constCast(stat.values()),
+        };
+    }
 
-  pub fn entries(self: *NodeList) []const struct { usize, *Node } {
-      var result = std.ArrayList(struct { usize, *Node }).init(self.alloc);
-      defer result.deinit();
-      for (self.list.items, 0..) |node, i| {
-          result.append(.{ i, node }) catch return &.{};
-      }
-      return result.toOwnedSlice() catch &.{};
-  }
+    fn allocator(self: NodeList) Allocator {
+      return switch (self) {
+          .live => |live| live.alloc,
+          .static => |stat| stat.alloc,
+      };
+    }
+
+    pub fn keys(self: NodeList) ![]const usize {
+        const alloc = self.allocator();
+        var indices = try ArrayList(usize).initCapacity(alloc, self.length());
+        for (0..self.length()) |i|
+            indices.appendAssumeCapacity(i);
+        return indices.toOwnedSlice();
+    }
+
+    pub fn entries(self: NodeList) ![]const struct { usize, *Node } {
+        const alloc = self.allocator();
+        var result = try ArrayList(struct { usize, *Node }).initCapacity(alloc, self.length());
+        for (self.values(), 0..) |n, i|
+            result.appendAssumeCapacity(.{ i, n });
+        return result.toOwnedSlice();
+    }
 };
 
 pub const NamedNodeMap = struct {
@@ -393,6 +435,90 @@ pub const NamedNodeMap = struct {
   }
 };
 
+const LiveNodeList = struct {
+    alloc: Allocator,
+    list: ArrayList(*Node),
+
+    fn init(alloc: Allocator) LiveNodeList {
+        return .{ .alloc = alloc, .list = ArrayList(*Node).init(alloc) };
+    }
+
+    fn deinit(self: *LiveNodeList) void {
+        // LiveNodeList does not own the nodes; they are owned by the DOM
+        self.list.deinit();
+    }
+
+    fn append(self: *LiveNodeList, node: *Node) !void {
+        try self.list.append(node);
+    }
+
+    fn insert(self: *LiveNodeList, index: usize, node: *Node) !void {
+        try self.list.insert(index, node);
+    }
+
+    fn remove(self: *LiveNodeList, node: *Node) void {
+        for (self.list.items, 0..) |it, i| {
+            if (it == node) {
+                _ = self.list.orderedRemove(i);
+                break;
+            }
+        }
+    }
+
+    fn item(self: LiveNodeList, index: usize) ?*Node {
+        return if (index < self.list.items.len) self.list.items[index] else null;
+    }
+
+    fn length(self: LiveNodeList) usize {
+        return self.list.items.len;
+    }
+
+    fn values(self: LiveNodeList) []*Node {
+        return self.list.items;
+    }
+
+    // fn entries(self: LiveNodeList) !ArrayList(struct { usize, *Node }) {
+    //     var result = try ArrayList(struct { usize, *Node }).initCapacity(self.alloc, self.length());
+    //     for (0..self.length()) |i| {
+    //         if (self.item(i)) |node| {
+    //             result.appendAssumeCapacity(.{ i, node });
+    //         }
+    //     }
+    //     return result.toOwnedSlice();
+    // }
+};
+
+const StaticNodeList = struct {
+    alloc: Allocator,
+    list: []const *Node,
+
+    fn init(alloc: Allocator, nodes: []*Node) !StaticNodeList {
+        const list = try alloc.dupe(*Node, nodes);
+        return .{ .alloc = alloc, .list = list };
+    }
+
+    fn deinit(self: *StaticNodeList) void {
+        // StaticNodeList does not own the nodes, only the slice
+        self.alloc.free(self.list);
+    }
+
+    fn item(self: StaticNodeList, index: usize) ?*Node {
+        return if (index < self.list.len) self.list[index] else null;
+    }
+
+    fn length(self: StaticNodeList) usize {
+        return self.list.len;
+    }
+
+    fn values(self: StaticNodeList) []const *Node {
+        return self.list;
+    }
+
+    // fn entries(self: StaticNodeList) !ArrayList(struct { usize, *Node }) {
+    //     // TODO
+    // }
+};
+
 const Element = struct {
     alloc: Allocator,
     tagName: [:0]const u8,
@@ -405,7 +531,7 @@ const Element = struct {
         const attrs = try alloc.create(NamedNodeMap);
         attrs.* = try NamedNodeMap.init(alloc);
         const kids = try alloc.create(NodeList);
-        kids.* = NodeList.init(alloc);
+        kids.* = NodeList.initLive(alloc);
         return .{ .alloc = alloc, .tagName = name, .attributes = attrs, .children = kids };
     }
 
@@ -486,7 +612,7 @@ const Document = struct {
 
     fn init(alloc: Allocator) !Document {
         const kids = try alloc.create(NodeList);
-        kids.* = NodeList.init(alloc);
+        kids.* = NodeList.initLive(alloc);
         return .{ .alloc = alloc, .children = kids };
     }
 
@@ -719,8 +845,8 @@ test "ProcInst.setContent" {
     try testing.expectEqualStrings("xml version=\"2.0\"", procinst.getContent());
 }
 
-test "NodeList.item" {
-    var list = NodeList.init(testing.allocator);
+test "LiveNodeList.item" {
+    var list = NodeList.initLive(testing.allocator);
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
@@ -733,8 +859,8 @@ test "NodeList.item" {
     try testing.expectEqual(null, list.item(2));
 }
 
-test "NodeList.keys" {
-    var list = NodeList.init(testing.allocator);
+test "LiveNodeList.keys" {
+    var list = NodeList.initLive(testing.allocator);
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
@@ -742,13 +868,13 @@ test "NodeList.keys" {
     try list.append(node1);
     try list.append(node2);
 
-    const keys = list.keys();
+    const keys = try list.keys();
     defer testing.allocator.free(keys);
     try testing.expectEqualSlices(usize, &[_]usize{ 0, 1 }, keys);
 }
 
-test "NodeList.values" {
-    var list = NodeList.init(testing.allocator);
+test "LiveNodeList.values" {
+    var list = NodeList.initLive(testing.allocator);
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
@@ -760,8 +886,8 @@ test "NodeList.values" {
     try testing.expectEqualSlices(*Node, &[_]*Node{ node1, node2 }, values);
 }
 
-test "NodeList.entries" {
-    var list = NodeList.init(testing.allocator);
+test "LiveNodeList.entries" {
+    var list = NodeList.initLive(testing.allocator);
     defer list.deinit();
 
     const node1 = try Node.Elem(testing.allocator, "div");
@@ -769,7 +895,7 @@ test "NodeList.entries" {
     try list.append(node1);
     try list.append(node2);
 
-    const entries = list.entries();
+    const entries = try list.entries();
     defer testing.allocator.free(entries);
     try testing.expectEqual(2, entries.len);
     try testing.expectEqual(0, entries[0][0]);
