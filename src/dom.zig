@@ -926,12 +926,10 @@ test "NamedNodeMap.setNamedItem" {
     defer map.deinit();
 
     const attr1 = try Node.Attr(testing.allocator, "id", "main");
-    // NOTE: do NOT deinit/destroy attr1 here — map takes ownership
     try map.setNamedItem(attr1);
     try testing.expectEqualStrings("main", map.getNamedItem("id").?.getValue());
 
     const attr2 = try Node.Attr(testing.allocator, "id", "content");
-    // NOTE: do NOT deinit/destroy attr2 here — map takes ownership
     try map.setNamedItem(attr2);
     try testing.expectEqualStrings("content", map.getNamedItem("id").?.getValue());
 }

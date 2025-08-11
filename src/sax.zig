@@ -12,6 +12,10 @@ pub const Text = extern struct {
     start: Position,
     end: Position,
     header: [2]usize,
+
+    pub inline fn content(self:Text) []const u8 {
+      return self.value[0..(self.header[1] - self.header[0])];
+    }
 };
 
 pub const Attr = extern struct {

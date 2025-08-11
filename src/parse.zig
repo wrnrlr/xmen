@@ -78,8 +78,7 @@ pub const DomParser = struct {
                 }
             },
             .comment => {
-                const comment_data = entity.data.comment;
-                const content = comment_data.value[0..(comment_data.header[1] - comment_data.header[0])];
+                const content = entity.data.comment.content();
                 const comment_node = try Node.Comment(self.allocator, content);
 
                 if (self.current_element) |parent| {

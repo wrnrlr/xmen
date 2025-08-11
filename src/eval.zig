@@ -15,24 +15,6 @@ pub const XPathError = error{
     OutOfMemory,
 };
 
-pub const XPathResult = struct {
-    nodes: std.ArrayList(*Node),
-
-    pub fn init(allocator: Allocator) XPathResult {
-        return XPathResult{
-            .nodes = std.ArrayList(*Node).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *XPathResult) void {
-        self.nodes.deinit();
-    }
-
-    pub fn append(self: *XPathResult, node: *Node) !void {
-        try self.nodes.append(node);
-    }
-};
-
 pub const XPathEvaluator = struct {
     allocator: Allocator,
 
@@ -40,9 +22,9 @@ pub const XPathEvaluator = struct {
         return XPathEvaluator{ .allocator = allocator };
     }
 
-    pub fn evaluate(self: *XPathEvaluator, context_node: *Node, ast: *AstNode) !XPathResult {
-        var result = XPathResult.init(self.allocator);
-        errdefer result.deinit();
+    pub fn evaluate(self: *XPathEvaluator, context_node: *Node, ast: *AstNode) !dom.NodeList {
+        var nodes = std.ArrayList(*Node).init(self.allocator);
+        errdefer nodes.deinit();
 
         // Handle different starting contexts
         const node_type = context_node.archetype();
@@ -52,22 +34,21 @@ pub const XPathEvaluator = struct {
             const children_list = context_node.children();
             for (children_list.values()) |child| {
                 if (child.archetype() == .element) {
-                    try self.evaluateNode(child, ast, &result);
+                    try self.evaluateNode(child, ast, &nodes);
                 }
             }
         } else {
             // Start evaluation from the given node
-            try self.evaluateNode(context_node, ast, &result);
+            try self.evaluateNode(context_node, ast, &nodes);
         }
 
+        const result = try dom.NodeList.initStatic(self.allocator, nodes.items);
+        nodes.deinit();
         return result;
     }
 
     // Also add this helper method for absolute path evaluation
-    pub fn evaluateAbsolute(self: *XPathEvaluator, context_node: *Node, ast: *AstNode) !XPathResult {
-        var result = XPathResult.init(self.allocator);
-        errdefer result.deinit();
-
+    pub fn evaluateAbsolute(self: *XPathEvaluator, context_node: *Node, ast: *AstNode) !dom.NodeList {
         // For absolute paths (starting with /), we need to find the document root
         var current = context_node;
 
@@ -80,7 +61,7 @@ pub const XPathEvaluator = struct {
         return self.evaluate(current, ast);
     }
 
-    fn evaluateNode(self: *XPathEvaluator, node: *Node, ast: *AstNode, result: *XPathResult) XPathError!void {
+    fn evaluateNode(self: *XPathEvaluator, node: *Node, ast: *AstNode, result: *std.ArrayList(*Node)) XPathError!void {
         if (ast.type != .Element) return;
 
         // Check if the current node can contain children
@@ -94,7 +75,7 @@ pub const XPathEvaluator = struct {
         }
     }
 
-    fn evaluateDocument(self: *XPathEvaluator, doc_node: *Node, ast: *AstNode, result: *XPathResult) XPathError!void {
+    fn evaluateDocument(self: *XPathEvaluator, doc_node: *Node, ast: *AstNode, result: *std.ArrayList(*Node)) XPathError!void {
         // Document node: process all children
         const children_list = doc_node.children();
         for (children_list.values()) |child| {
@@ -102,7 +83,7 @@ pub const XPathEvaluator = struct {
         }
     }
 
-    fn evaluateElement(self: *XPathEvaluator, elem_node: *Node, ast: *AstNode, result: *XPathResult) XPathError!void {
+    fn evaluateElement(self: *XPathEvaluator, elem_node: *Node, ast: *AstNode, result: *std.ArrayList(*Node)) XPathError!void {
         // Check if element matches the AST node name
         if (ast.name) |name| {
             const tag_name = elem_node.tagName();
@@ -188,8 +169,8 @@ pub fn main() !void {
     defer result.deinit();
 
     // Print results
-    std.debug.print("Found {} matching nodes:\n", .{result.nodes.items.len});
-    for (result.nodes.items) |node| {
+    std.debug.print("Found {} matching nodes:\n", .{result.length()});
+    for (result.values()) |node| {
         var writer = std.io.getStdOut().writer();
         try node.render(writer);
         try writer.print("\n", .{});
@@ -224,9 +205,9 @@ test "XPathEvaluator: simple path evaluation" {
     defer result.deinit();
 
     // Verify results
-    try testing.expectEqual(@as(usize, 1), result.nodes.items.len);
-    try testing.expectEqual(NodeType.element, result.nodes.items[0].archetype());
-    try testing.expectEqualStrings("child", result.nodes.items[0].tagName());
+    try testing.expectEqual(@as(usize, 1), result.length());
+    try testing.expectEqual(NodeType.element, result.item(0).?.archetype());
+    try testing.expectEqualStrings("child", result.item(0).?.tagName());
 }
 
 test "XPathEvaluator: path with predicate" {
@@ -262,10 +243,10 @@ test "XPathEvaluator: path with predicate" {
     defer result.deinit();
 
     // Verify results - should only match the first child
-    try testing.expectEqual(@as(usize, 1), result.nodes.items.len);
-    try testing.expectEqual(NodeType.element, result.nodes.items[0].archetype());
-    try testing.expectEqualStrings("child", result.nodes.items[0].tagName());
-    try testing.expectEqualStrings("value", result.nodes.items[0].getAttribute("attr").?);
+    try testing.expectEqual(@as(usize, 1), result.length());
+    try testing.expectEqual(NodeType.element, result.item(0).?.archetype());
+    try testing.expectEqualStrings("child", result.item(0).?.tagName());
+    try testing.expectEqualStrings("value", result.item(0).?.getAttribute("attr").?);
 }
 
 test "XPathEvaluator: complex path" {
@@ -299,9 +280,9 @@ test "XPathEvaluator: complex path" {
     defer result.deinit();
 
     // Verify results
-    try testing.expectEqual(@as(usize, 1), result.nodes.items.len);
-    try testing.expectEqual(NodeType.element, result.nodes.items[0].archetype());
-    try testing.expectEqualStrings("grandchild", result.nodes.items[0].tagName());
+    try testing.expectEqual(@as(usize, 1), result.length());
+    try testing.expectEqual(NodeType.element, result.item(0).?.archetype());
+    try testing.expectEqualStrings("grandchild", result.item(0).?.tagName());
 }
 
 test "XPathEvaluator: no matching nodes" {
@@ -332,7 +313,7 @@ test "XPathEvaluator: no matching nodes" {
     defer result.deinit();
 
     // Verify no matches
-    try testing.expectEqual(@as(usize, 0), result.nodes.items.len);
+    try testing.expectEqual(@as(usize, 0), result.length());
 }
 
 test "XPathEvaluator: empty document" {
@@ -356,5 +337,5 @@ test "XPathEvaluator: empty document" {
     defer result.deinit();
 
     // Verify no matches
-    try testing.expectEqual(@as(usize, 0), result.nodes.items.len);
+    try testing.expectEqual(@as(usize, 0), result.length());
 }

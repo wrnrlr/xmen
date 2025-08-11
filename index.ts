@@ -4,31 +4,76 @@ const { i32, u8, ptr, cstring, i64 } = FFIType;
 
 console.log(`./zig-out/lib/libxmen.${suffix}`)
 
+const ELEMENT_NODE = 1 as const
+const ATTRIBUTE_NODE = 2
+const TEXT_NODE = 3
+const CDATA_SECTION_NODE = 4
+const PROCESSING_INSTRUCTION_NODE = 7
+const COMMENT_NODE = 8
+const DOCUMENT_NODE = 9
+const DOCUMENT_TYPE_NODE = 10
+const DOCUMENT_FRAGMENT_NODE = 11
+
+export const NodeType = {
+  ELEMENT_NODE,
+  ATTRIBUTE_NODE,
+  TEXT_NODE,
+  CDATA_SECTION_NODE,
+  PROCESSING_INSTRUCTION_NODE,
+  COMMENT_NODE,
+  DOCUMENT_NODE,
+  DOCUMENT_TYPE_NODE,
+  DOCUMENT_FRAGMENT_NODE
+} as const
+
+type NodeType = (typeof NodeType)[keyof typeof NodeType]
+
+declare const __nt: unique symbol
+export type Ptr<NT extends NodeType> = FFIType.ptr & { [__nt]: NT }
+type $Element = Ptr<typeof ELEMENT_NODE>;
+type $Attr = Ptr<typeof ATTRIBUTE_NODE>;
+type $Text = Ptr<typeof ATTRIBUTE_NODE>;
+type $Comment = Ptr<typeof ATTRIBUTE_NODE>;
+type $CData = Ptr<typeof ATTRIBUTE_NODE>;
+type $ProcInst = Ptr<typeof ATTRIBUTE_NODE>;
+type $Doc = Ptr<typeof ATTRIBUTE_NODE>;
+type $NodeList = Ptr<typeof ATTRIBUTE_NODE>; // Fix
+type $List = Ptr<typeof ATTRIBUTE_NODE>; // Fix
+
+const elemPtr = ptr as $Element
+const attrPtr = ptr as $Element
+const docPtr = ptr as $Element
+
+const inodePtr = ptr as $Element | $Doc
+const txtPtr = ptr as $Element
+const nodePtr = inodePtr | txtPtr | attrPtr
+
+
 const path = `./zig-out/lib/libxmen.${suffix}`;
 const { symbols } = dlopen(path, {
   // Constructors
-  alloc_elem: { args: [cstring], returns: ptr },
-  alloc_attr: { args: [cstring, cstring], returns: ptr },
-  alloc_text: { args: [cstring], returns: ptr },
-  alloc_cdata: { args: [cstring], returns: ptr },
-  alloc_comment: { args: [cstring], returns: ptr },
-  alloc_procinst: { args: [cstring], returns: ptr },
-  alloc_doc: { args: [], returns: ptr },
+  alloc_elem: { args: [cstring], returns: elemPtr },
+  alloc_attr: { args: [cstring, cstring], returns: attrPtr },
+  alloc_text: { args: [cstring], returns: txtPtr },
+  alloc_cdata: { args: [cstring], returns: txtPtr },
+  alloc_comment: { args: [cstring], returns: txtPtr },
+  alloc_procinst: { args: [cstring], returns: txtPtr },
+  alloc_doc: { args: [], returns: docPtr },
 
   // General Node properties
-  node_free: { args: [ptr], returns: i32 },
-  node_type: { args: [ptr], returns: u8 },
-  node_parent: { args: [ptr], returns: ptr },
-  node_set_parent: { args: [ptr, ptr], returns: i32 },
+  node_free: { args: [nodePtr], returns: i32 },
+  node_type: { args: [nodePtr], returns: u8 },
+  node_parent: { args: [nodePtr], returns: ptr },
+  node_set_parent: { args: [nodePtr, nodePtr], returns: i32 },
 
   // Inner node: Element & Document
-  inode_children: { args: [ptr], returns: ptr },
-  inode_count: { args: [ptr], returns: i64 },
-  inode_append: { args: [ptr, ptr], returns: i32 },
-  inode_prepend: { args: [ptr, ptr], returns: i32 },
+  inode_children: { args: [inodePtr], returns: ptr },
+  inode_count: { args: [inodePtr], returns: i64 },
+  inode_append: { args: [inodePtr, ptr], returns: i32 },
+  inode_prepend: { args: [inodePtr, ptr], returns: i32 },
 
   // Element
-  elem_tag: { args: [ptr], returns: cstring },
+  elem_tag: { args: [ptr as Ptr<typeof ELEMENT_NODE>], returns: cstring },
   elem_attrs: { args: [ptr], returns: ptr },
   elem_attr: { args: [ptr, cstring], returns: cstring }, // Fixed: was elem_get_attr
   elem_set_attr: { args: [ptr, cstring, cstring], returns: i32 },
@@ -71,18 +116,6 @@ const { symbols } = dlopen(path, {
   xpath_result_length: { args: [ptr], returns: i32 },
   xpath_result_item: { args: [ptr, i32], returns: ptr },
 });
-
-export enum NodeType {
-  ELEMENT_NODE = 1,
-  ATTRIBUTE_NODE = 2,
-  TEXT_NODE = 3,
-  CDATA_SECTION_NODE = 4,
-  PROCESSING_INSTRUCTION_NODE = 7,
-  COMMENT_NODE = 8,
-  DOCUMENT_NODE = 9,
-  DOCUMENT_TYPE_NODE = 10,
-  DOCUMENT_FRAGMENT_NODE = 11,
-}
 
 // NodeList implementation
 export class NodeList {

@@ -76,7 +76,33 @@ $ xmen xpath -f <URL|FILE|DIR> /library/book
 * Maybe use [SegmentedList](https://ziglang.org/documentation/master/std/#std.segmented_list.SegmentedList) for `NodeList`.
 * Investigate what [String interning](https://en.wikipedia.org/wiki/String_interning) would mean doe api design and what speed trade-offs are involved. .
 
-##
+## Issues
+
+### Parent removal logic can misbehave
+
+In Node.setParent:
+
+    if (n.parent()) |ancestor| {
+        switch (ancestor.*) {
+            .element => |*e| e.children.remove(n),
+            .document => |*d| d.children.remove(n),
+            else => unreachable,
+        }
+    }
+
+Problem: remove on a NodeList might fail silently or leave stale pointers if not found.
+
+Suggestion: Either assert the removal was successful or handle the case where the child isn't found (especially for cyclic reference prevention).
+
+
+### Dom improvements
+
+Document ownership clearly: either setNamedItem takes ownership, or it copies the node. Make the contract explicit in the function comment.
+
+For safety you could make setNamedItem set the caller's pointer to null (if you change the signature to accept * *Node), so it's obvious to the caller that the pointer was moved. But that’s an API change.
+
+Add a debug-time assertion or helper to check for double-free in tests (e.g. only call defer attr.destroy() when you know you still own it).
+
 
 ## Awesome Links
 * [Invisible XML](https://invisiblexml.org/)
