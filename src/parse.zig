@@ -19,9 +19,10 @@ pub const DomParser = struct {
         parser.* = .{
             .allocator = allocator,
             .document = doc,
-            .current_element = null,
+            .current_element = doc,
             .element_stack = std.ArrayList(*Node).init(allocator),
         };
+        try parser.element_stack.append(doc);
         return parser;
     }
 
@@ -38,11 +39,7 @@ pub const DomParser = struct {
                 const tag_name = tag.name[0..tag.name_len];
                 const elem = try Node.Elem(self.allocator, tag_name);
 
-                if (self.current_element) |parent| {
-                    try parent.append(elem);
-                } else {
-                    try self.document.append(elem);
-                }
+                try self.current_element.?.append(elem);
 
                 // Handle attributes
                 if (tag.attributes != null and tag.attributes_len > 0) {
@@ -58,54 +55,29 @@ pub const DomParser = struct {
                 self.current_element = elem;
             },
             .close_tag => {
-                if (self.element_stack.items.len > 0) {
+                if (self.element_stack.items.len > 1)
                     _ = self.element_stack.pop();
-                }
-                self.current_element = if (self.element_stack.items.len > 0)
-                    self.element_stack.items[self.element_stack.items.len - 1]
-                else
-                    null;
+                self.current_element = self.element_stack.items[self.element_stack.items.len - 1];
             },
             .text => {
-                const text_data = entity.data.text;
-                const content = text_data.value[0..(text_data.header[1] - text_data.header[0])];
+                const content = entity.data.comment.content();
                 const text_node = try Node.Text(self.allocator, content);
-
-                if (self.current_element) |parent| {
-                    try parent.append(text_node);
-                } else {
-                    try self.document.append(text_node);
-                }
+                try self.current_element.?.append(text_node);
             },
             .comment => {
                 const content = entity.data.comment.content();
                 const comment_node = try Node.Comment(self.allocator, content);
-
-                if (self.current_element) |parent| {
-                    try parent.append(comment_node);
-                } else {
-                    try self.document.append(comment_node);
-                }
+                try self.current_element.?.append(comment_node);
             },
             .processing_instruction => {
                 const content = entity.data.processing_instruction.content();
                 const pi_node = try Node.ProcInst(self.allocator, content);
-
-                if (self.current_element) |parent| {
-                    try parent.append(pi_node);
-                } else {
-                    try self.document.append(pi_node);
-                }
+                try self.current_element.?.append(pi_node);
             },
             .cdata => {
                 const content = entity.data.cdata.content();
                 const cdata_node = try Node.CData(self.allocator, content);
-
-                if (self.current_element) |parent| {
-                    try parent.append(cdata_node);
-                } else {
-                    try self.document.append(cdata_node);
-                }
+                try self.current_element.?.append(cdata_node);
             },
         }
     }
