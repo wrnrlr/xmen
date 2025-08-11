@@ -88,8 +88,7 @@ pub const DomParser = struct {
                 }
             },
             .processing_instruction => {
-                const pi_data = entity.data.processing_instruction;
-                const content = pi_data.value[0..(pi_data.header[1] - pi_data.header[0])];
+                const content = entity.data.processing_instruction.content();
                 const pi_node = try Node.ProcInst(self.allocator, content);
 
                 if (self.current_element) |parent| {
@@ -99,8 +98,7 @@ pub const DomParser = struct {
                 }
             },
             .cdata => {
-                const cdata_data = entity.data.cdata;
-                const content = cdata_data.value[0..(cdata_data.header[1] - cdata_data.header[0])];
+                const content = entity.data.cdata.content();
                 const cdata_node = try Node.CData(self.allocator, content);
 
                 if (self.current_element) |parent| {
