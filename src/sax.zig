@@ -338,13 +338,6 @@ pub const SaxParser = struct {
 
     // Helper function to add an attribute safely
     fn addAttribute(self: *SaxParser, name: []const u8, value: []const u8) ParseError!void {
-        // Check attribute limits to prevent DoS
-        const MAX_ATTRIBUTES = 1000;
-        if (self.attributes.items.len >= MAX_ATTRIBUTES) {
-            return ParseError.AttributeLimitExceeded;
-        }
-
-        // Skip invalid attributes (like lone "/" in self-closing tags)
         if (name.len == 0 or std.mem.eql(u8, name, "/")) {
             return;
         }
