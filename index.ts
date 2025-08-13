@@ -4,78 +4,47 @@ const { i32, u8, ptr, cstring, i64 } = FFIType;
 
 console.log(`./zig-out/lib/libxmen.${suffix}`)
 
-const ELEMENT_NODE = 1 as const
-const ATTRIBUTE_NODE = 2
-const TEXT_NODE = 3
-const CDATA_SECTION_NODE = 4
-const PROCESSING_INSTRUCTION_NODE = 7
-const COMMENT_NODE = 8
-const DOCUMENT_NODE = 9
-const DOCUMENT_TYPE_NODE = 10
-const DOCUMENT_FRAGMENT_NODE = 11
-
 export const NodeType = {
-  ELEMENT_NODE,
-  ATTRIBUTE_NODE,
-  TEXT_NODE,
-  CDATA_SECTION_NODE,
-  PROCESSING_INSTRUCTION_NODE,
-  COMMENT_NODE,
-  DOCUMENT_NODE,
-  DOCUMENT_TYPE_NODE,
-  DOCUMENT_FRAGMENT_NODE
+  ELEMENT_NODE: 1,
+  ATTRIBUTE_NODE: 2,
+  TEXT_NODE: 3,
+  CDATA_SECTION_NODE: 4,
+  PROCESSING_INSTRUCTION_NODE: 7,
+  COMMENT_NODE: 8,
+  DOCUMENT_NODE: 9,
+  DOCUMENT_TYPE_NODE: 10,
+  DOCUMENT_FRAGMENT_NODE: 11
 } as const
 
 type NodeType = (typeof NodeType)[keyof typeof NodeType]
 
-declare const __nt: unique symbol
-export type Ptr<NT extends NodeType> = FFIType.ptr & { [__nt]: NT }
-type $Element = Ptr<typeof ELEMENT_NODE>;
-type $Attr = Ptr<typeof ATTRIBUTE_NODE>;
-type $Text = Ptr<typeof ATTRIBUTE_NODE>;
-type $Comment = Ptr<typeof ATTRIBUTE_NODE>;
-type $CData = Ptr<typeof ATTRIBUTE_NODE>;
-type $ProcInst = Ptr<typeof ATTRIBUTE_NODE>;
-type $Doc = Ptr<typeof ATTRIBUTE_NODE>;
-type $NodeList = Ptr<typeof ATTRIBUTE_NODE>; // Fix
-type $List = Ptr<typeof ATTRIBUTE_NODE>; // Fix
-
-const elemPtr = ptr as $Element
-const attrPtr = ptr as $Element
-const docPtr = ptr as $Element
-
-const inodePtr = ptr as $Element | $Doc
-const txtPtr = ptr as $Element
-const nodePtr = inodePtr | txtPtr | attrPtr
-
-
 const path = `./zig-out/lib/libxmen.${suffix}`;
 const { symbols } = dlopen(path, {
   // Constructors
-  alloc_elem: { args: [cstring], returns: elemPtr },
-  alloc_attr: { args: [cstring, cstring], returns: attrPtr },
-  alloc_text: { args: [cstring], returns: txtPtr },
-  alloc_cdata: { args: [cstring], returns: txtPtr },
-  alloc_comment: { args: [cstring], returns: txtPtr },
-  alloc_procinst: { args: [cstring], returns: txtPtr },
-  alloc_doc: { args: [], returns: docPtr },
+  alloc_elem: { args: [cstring], returns: ptr },
+  alloc_attr: { args: [cstring, cstring], returns: ptr },
+  alloc_text: { args: [cstring], returns: ptr },
+  alloc_cdata: { args: [cstring], returns: ptr },
+  alloc_comment: { args: [cstring], returns: ptr },
+  alloc_procinst: { args: [cstring], returns: ptr },
+  alloc_doc: { args: [], returns: ptr },
 
   // General Node properties
-  node_free: { args: [nodePtr], returns: i32 },
-  node_type: { args: [nodePtr], returns: u8 },
-  node_parent: { args: [nodePtr], returns: ptr },
-  node_set_parent: { args: [nodePtr, nodePtr], returns: i32 },
+  node_free: { args: [ptr], returns: i32 },
+  node_type: { args: [ptr], returns: u8 },
+  node_parent: { args: [ptr], returns: ptr },
+  node_set_parent: { args: [ptr, ptr], returns: i32 },
 
   // Inner node: Element & Document
-  inode_children: { args: [inodePtr], returns: ptr },
-  inode_count: { args: [inodePtr], returns: i64 },
-  inode_append: { args: [inodePtr, ptr], returns: i32 },
-  inode_prepend: { args: [inodePtr, ptr], returns: i32 },
+  inode_children: { args: [ptr], returns: ptr },
+  inode_count: { args: [ptr], returns: i64 },
+  inode_append: { args: [ptr, ptr], returns: i32 },
+  inode_prepend: { args: [ptr, ptr], returns: i32 },
 
   // Element
-  elem_tag: { args: [ptr as Ptr<typeof ELEMENT_NODE>], returns: cstring },
+  elem_tag: { args: [ptr], returns: cstring },
   elem_attrs: { args: [ptr], returns: ptr },
-  elem_attr: { args: [ptr, cstring], returns: cstring }, // Fixed: was elem_get_attr
+  elem_get_attr: { args: [ptr, cstring], returns: cstring }, // Fixed: was elem_get_attr
   elem_set_attr: { args: [ptr, cstring, cstring], returns: i32 },
   elem_remove_attr: { args: [ptr, cstring], returns: i32 },
 
@@ -102,13 +71,13 @@ const { symbols } = dlopen(path, {
   list_prepend: { args: [ptr, ptr], returns: i32 },
 
   // SAX
-  sax_alloc: { args: [ptr, ptr], returns: ptr },
-  sax_cb: { args: [ptr, ptr], returns: i32 },
-  sax_write: { args: [ptr, cstring, i32], returns: i32 },
-  sax_free: { args: [ptr], returns: i32 },
+  // sax_alloc: { args: [ptr, ptr], returns: ptr },
+  // sax_cb: { args: [ptr, ptr], returns: i32 },
+  // sax_write: { args: [ptr, cstring, i32], returns: i32 },
+  // sax_free: { args: [ptr], returns: i32 },
 
   // XML Parsing
-  xml_parse: { args: [cstring], returns: ptr },
+  // xml_parse: { args: [cstring], returns: ptr },
 
   // XPath
   xpath_eval: { args: [cstring, ptr], returns: ptr },
@@ -204,7 +173,8 @@ export class NamedNodeMap {
   }
 
   getNamedItem(name: string): Attr | null {
-    const attrPtr = symbols.map_get(this.ptr, name);
+    const buf = Buffer.from(name + '\0')
+    const attrPtr = symbols.map_get(this.ptr, buf);
     if (!attrPtr) return null;
     return new Attr(attrPtr);
   }
@@ -214,7 +184,8 @@ export class NamedNodeMap {
   }
 
   removeNamedItem(name: string): void {
-    symbols.map_remove(this.ptr, name);
+    const buf = Buffer.from(name + '\0')
+    symbols.map_remove(this.ptr, buf);
   }
 
   // Iterator support
@@ -362,7 +333,8 @@ export abstract class Node {
 
   // XPath evaluation on this node
   selectNodes(xpath: string): XPathResult {
-    const resultPtr = symbols.xpath_eval(xpath, this.ptr);
+    const buf = Buffer.from(xpath);
+    const resultPtr = symbols.xpath_eval(buf, this.ptr);
     if (!resultPtr) throw new Error('XPath evaluation failed');
     return new XPathResult(resultPtr);
   }
@@ -415,29 +387,27 @@ export class Document extends Node {
   }
 
   createProcessingInstruction(target: string, data: string = ''): ProcessingInstruction {
-    const content = data ? `${target} ${data}` : target;
-    return new ProcessingInstruction(content);
+    const content = data ? `${target} ${data}` : target
+    return new ProcessingInstruction(content)
   }
 
   createAttribute(name: string, value: string = ''): Attr {
-    return new Attr(name, value);
+    return new Attr(name, value)
   }
 
   // Parse XML string into this document
   static parse(xmlString: string): Document | null {
-    const docPtr = symbols.xml_parse(xmlString);
-    if (!docPtr) return null;
-    return new Document() // Note: This creates a new doc, you might need to adjust based on xml_parse implementation
+    const buf = Buffer.from(xmlString + "\0")
+    // const docPtr = symbols.xml_parse(buf)
+    // if (!docPtr) return null
+    throw 'todo'
   }
 }
 
 export class Element extends Node {
-  constructor(tagNameOrPtr: string | Pointer) {
-    if (typeof tagNameOrPtr === 'string') {
-      super(symbols.alloc_elem(tagNameOrPtr)!);
-    } else {
-      super(tagNameOrPtr);
-    }
+  constructor(tagName: string) {
+    const buf = Buffer.from(tagName + "\0")
+    super(symbols.alloc_elem(buf)!)
   }
 
   get tagName(): string {
@@ -463,7 +433,8 @@ export class Element extends Node {
   }
 
   getAttribute(name: string): string | null {
-    return symbols.elem_attr(this.ptr, name)?.toString() ?? null; // Fixed: was elem_get_attr
+    const bufName = Buffer.from(name + '\0')
+    return symbols.elem_get_attr(this.ptr, bufName)?.toString();
   }
 
   getAttributeNode(name: string): Attr | null {
@@ -471,7 +442,9 @@ export class Element extends Node {
   }
 
   setAttribute(name: string, value: string): void {
-    symbols.elem_set_attr(this.ptr, name, value);
+    const bufName = Buffer.from(name + '\0')
+    const bufValue = Buffer.from(value + '\0')
+    symbols.elem_set_attr(this.ptr, bufName, bufValue);
   }
 
   setAttributeNode(node: Attr): void {
@@ -483,7 +456,8 @@ export class Element extends Node {
   }
 
   removeAttribute(name: string): void {
-    symbols.elem_remove_attr(this.ptr, name);
+    const bufName = Buffer.from(name + '\0')
+    symbols.elem_remove_attr(this.ptr, bufName);
   }
 
   removeAttributeNode(node: Attr): void {
@@ -557,13 +531,10 @@ export class Element extends Node {
 }
 
 export class Attr extends Node {
-  constructor(nameOrPtr: string | Pointer, value?: string) {
-    if (typeof nameOrPtr === 'string') {
-      if (value === undefined) throw new Error('Value required for new Attr');
-      super(symbols.alloc_attr(nameOrPtr, value)!);
-    } else {
-      super(nameOrPtr);
-    }
+  constructor(name: string, value?: string) {
+    const bufName = Buffer.from(name + '\0')
+    const bufValue = Buffer.from(value + '\0')
+    super(symbols.alloc_attr(bufName, bufValue)!);
   }
 
   get name(): string {
@@ -665,12 +636,9 @@ export abstract class CharacterData extends Node {
 }
 
 export class Text extends CharacterData {
-  constructor(contentOrPtr: string | Pointer) {
-    if (typeof contentOrPtr === 'string') {
-      super(symbols.alloc_text(contentOrPtr)!);
-    } else {
-      super(contentOrPtr);
-    }
+  constructor(content: string) {
+    const buf = Buffer.from(content + "\0")
+    super(symbols.alloc_text(buf)!)
   }
 
   splitText(offset: number): Text {
@@ -687,12 +655,9 @@ export class Text extends CharacterData {
 }
 
 export class ProcessingInstruction extends CharacterData {
-  constructor(contentOrPtr: string | Pointer) {
-    if (typeof contentOrPtr === 'string') {
-      super(symbols.alloc_procinst(contentOrPtr)!);
-    } else {
-      super(contentOrPtr);
-    }
+  constructor(content: string) {
+    const buf = Buffer.from(content + "\0")
+    super(symbols.alloc_procinst(buf)!)
   }
 
   get target(): string {
@@ -714,22 +679,16 @@ export class ProcessingInstruction extends CharacterData {
 }
 
 export class CDATASection extends CharacterData {
-  constructor(contentOrPtr: string | Pointer) {
-    if (typeof contentOrPtr === 'string') {
-      super(symbols.alloc_cdata(contentOrPtr)!);
-    } else {
-      super(contentOrPtr);
-    }
+  constructor(content: string) {
+    const buf = Buffer.from(content + "\0")
+    super(symbols.alloc_cdata(buf)!)
   }
 }
 
 export class Comment extends CharacterData {
-  constructor(contentOrPtr: string | Pointer) {
-    if (typeof contentOrPtr === 'string') {
-      super(symbols.alloc_comment(contentOrPtr)!);
-    } else {
-      super(contentOrPtr);
-    }
+  constructor(content: string) {
+    const buf = Buffer.from(content + "\0")
+    super(symbols.alloc_comment(buf)!)
   }
 }
 
@@ -784,19 +743,8 @@ function createNode(ptr: Pointer): Node {
   return new Cls(ptr);
 }
 
-// Utility functions
-export function parseXML(xmlString: string): Document | null {
-  const docPtr = symbols.xml_parse(xmlString);
-  if (!docPtr) return null;
-  return createNode(docPtr) as Document;
-}
 
-// XPath evaluation at document level
-export function evaluateXPath(xpath: string, contextNode: Node): XPathResult {
-  return contextNode.selectNodes(xpath);
-}
 
-// Example usage:
 function example() {
   // Create document structure
   const doc = new Document();
@@ -830,17 +778,7 @@ function example() {
   const result = doc.selectNodes('//child');
   result.forEach((node, index) => {
     console.log(`Child ${index}: ${(node as Element).getAttribute('type')}`);
-  });
-  result.free(); // Important: free XPath results
-
-  // Free the document tree
-  text1.free();
-  text2.free();
-  child1.free();
-  child2.free();
-  root.free();
-  doc.free();
+  })
 }
 
-// Export the example for testing
-export { example };
+example()
