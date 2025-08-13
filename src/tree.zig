@@ -1,3 +1,4 @@
+// XML DOM implementation
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
@@ -14,7 +15,7 @@ const Attribute = struct {
     value_id: StringId,
 };
 
-const Node = struct {
+const Element = struct {
     kind: NodeKind,
     tag: ?StringId,
     attributes_range: Range,
@@ -99,7 +100,7 @@ const StringInterner = struct {
 const DOM = struct {
     allocator: Allocator,
     interner: StringInterner,
-    nodes: std.ArrayList(Node),
+    nodes: std.ArrayList(Element),
     children: std.ArrayList(NodeIndex),
     attributes: std.ArrayList(Attribute),
 
@@ -107,7 +108,7 @@ const DOM = struct {
         return .{
             .allocator = allocator,
             .interner = StringInterner.init(allocator),
-            .nodes = std.ArrayList(Node).init(allocator),
+            .nodes = std.ArrayList(Element).init(allocator),
             .children = std.ArrayList(NodeIndex).init(allocator),
             .attributes = std.ArrayList(Attribute).init(allocator),
         };
