@@ -1,21 +1,13 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-
 const NodeIndex = u32;
 const StringId = u32;
 const InvalidIndex: NodeIndex = 0xffffffff;
 const InvalidString: StringId = 0xffffffff;
 
-const Range = struct {
-    start: u32,
-    len: u32,
-};
-
-const NodeKind = enum {
-    element,
-    text,
-};
+const Range = struct { start: u32, len: u32 };
+const NodeKind = enum { element, text };
 
 const Attribute = struct {
     name_id: StringId,
@@ -38,6 +30,36 @@ const Document = struct {
     children_len: u32,
     attributes_len: u32,
     generation: u64,
+};
+
+const EditKind = enum { ReplaceChildren, SetAttributes };
+
+const Edit = struct {
+    kind: EditKind,
+    target: NodeIndex,
+    children: []const NodeIndex = &[_]NodeIndex{},
+    attrs: []const Attribute = &[_]Attribute{},
+};
+
+const TransformBatch = struct {
+    allocator: Allocator,
+    edits: std.ArrayList(Edit),
+
+    pub fn init(allocator: Allocator) TransformBatch {
+        return .{ .allocator = allocator, .edits = std.ArrayList(Edit).init(allocator) };
+    }
+
+    pub fn deinit(self: *TransformBatch) void {
+        self.edits.deinit();
+    }
+
+    pub fn replaceChildren(self: *TransformBatch, target: NodeIndex, children: []const NodeIndex) !void {
+        try self.edits.append(.{ .kind = .ReplaceChildren, .target = target, .children = children });
+    }
+
+    pub fn setAttributes(self: *TransformBatch, target: NodeIndex, attrs: []const Attribute) !void {
+        try self.edits.append(.{ .kind = .SetAttributes, .target = target, .attrs = attrs });
+    }
 };
 
 /// String interning system
@@ -82,7 +104,7 @@ const DOM = struct {
     attributes: std.ArrayList(Attribute),
 
     pub fn init(allocator: Allocator) DOM {
-        return DOM{
+        return .{
             .allocator = allocator,
             .interner = StringInterner.init(allocator),
             .nodes = std.ArrayList(Node).init(allocator),
@@ -123,13 +145,27 @@ const DOM = struct {
         };
     }
 
-    pub fn setAttributes(self: *DOM, doc: Document, node: NodeIndex, attrs: []const Attribute) !Document {
+    pub fn applyBatch(self: *DOM, doc: Document, batch: *TransformBatch) !Document {
+        var cur_doc = doc;
+        for (batch.edits.items) |edit| {
+            switch (edit.kind) {
+                .ReplaceChildren => {
+                    cur_doc = try self.replaceChildren(cur_doc, edit.target, edit.children);
+                },
+                .SetAttributes => {
+                    cur_doc = try self.setAttributes(cur_doc, edit.target, edit.attrs);
+                },
+            }
+        }
+        return cur_doc;
+    }
+
+    fn setAttributes(self: *DOM, doc: Document, node: NodeIndex, attrs: []const Attribute) !Document {
         const new_start: u32 = @intCast(self.attributes.items.len);
         try self.attributes.appendSlice(attrs);
 
         var new_node = self.nodes.items[node];
         new_node.attributes_range = .{ .start = new_start, .len = @intCast(attrs.len) };
-        // const new_idx: NodeIndex = @intCast(self.nodes.items.len);
         try self.nodes.append(new_node);
 
         return .{
@@ -141,7 +177,7 @@ const DOM = struct {
         };
     }
 
-    pub fn replaceChildren(
+    fn replaceChildren(
         self: *DOM,
         doc: Document,
         parent: NodeIndex,
@@ -195,7 +231,6 @@ const DOM = struct {
     }
 
     fn updatePreorder(self: *DOM, node_idx: NodeIndex, start: u32) !u32 {
-        // var preorder_counter = start;
         var stack = std.ArrayList(NodeIndex).init(self.allocator);
         defer stack.deinit();
 
@@ -232,26 +267,22 @@ pub fn main() !void {
     const tag_body = try dom.interner.intern("body");
     _ = try dom.interner.intern("Hello");
 
-    var doc1 = try dom.createDocument(.element, tag_root);
-
+    const doc1 = try dom.createDocument(.element, tag_root);
     const body_node = try dom.addNode(.element, tag_body, doc1.root);
-    doc1 = try dom.replaceChildren(doc1, doc1.root, &[_]NodeIndex{ body_node });
 
-    const text_node = try dom.addNode(.text, null, body_node);
-    doc1 = try dom.replaceChildren(doc1, body_node, &[_]NodeIndex{ text_node });
+    var batch = TransformBatch.init(allocator);
+    defer batch.deinit();
 
-    // Set attributes on <body>
+    try batch.replaceChildren(doc1.root, &[_]NodeIndex{ body_node });
+
     const attr_class = try dom.interner.intern("class");
     const attr_val = try dom.interner.intern("main");
-    const doc2 = try dom.setAttributes(doc1, body_node, &[_]Attribute{
-        .{ .name_id = attr_class, .value_id = attr_val },
-    });
+    try batch.setAttributes(body_node, &[_]Attribute{.{ .name_id = attr_class, .value_id = attr_val }});
 
-    std.debug.print("Root tag: {s}\n", .{ dom.interner.get(dom.nodes.items[doc2.root].tag.?) });
-    std.debug.print("Body attrs: {}\n", .{ dom.nodes.items[body_node].attributes_range.len });
-    std.debug.print("root attrs: {}\n", .{ dom.attributes.items.len });
+    const doc2 = try dom.applyBatch(doc1, &batch);
+
+    std.debug.print("Generation after batch: {}\n", .{ doc2.generation });
 }
-
 
 // TODO
 // If you want, I can next implement a Transformation struct that batches replaceChildren, setAttributes, and setText into a single pass over the tree so we only COW the path to the root once. That will give you true batched transformations.
