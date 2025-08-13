@@ -256,6 +256,148 @@ const DOM = struct {
     }
 };
 
+const sax = @import("sax.zig");
+const SaxParser = sax.SaxParser;
+const Entity = sax.Entity;
+
+const MutableNode = struct {
+    kind: NodeKind,
+    tag: ?StringId,
+    attributes: std.ArrayList(Attribute),
+    children: std.ArrayList(*MutableNode),
+
+    pub fn init(allocator: Allocator, kind: NodeKind, tag: ?StringId) MutableNode {
+        return .{
+            .kind = kind,
+            .tag = tag,
+            .attributes = std.ArrayList(Attribute).init(allocator),
+            .children = std.ArrayList(*MutableNode).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *MutableNode) void {
+        for (self.children.items) |child| {
+            child.deinit();
+            self.children.allocator.destroy(child);
+        }
+        self.children.deinit();
+        self.attributes.deinit();
+    }
+};
+
+const DomParser = struct {
+    allocator: Allocator,
+    dom: *DOM,
+    stack: std.ArrayList(*MutableNode),
+    root: ?*MutableNode = null,
+
+    pub fn init(allocator: Allocator, dom: *DOM) DomParser {
+        return .{
+            .allocator = allocator,
+            .dom = dom,
+            .stack = std.ArrayList(*MutableNode).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *DomParser) void {
+        self.stack.deinit();
+        if (self.root) |r| {
+            r.deinit();
+            self.allocator.destroy(r);
+        }
+    }
+
+    pub fn handleEvent(self: *DomParser, entity: Entity) !void {
+        switch (entity.tag) {
+            .open_tag => {
+                const tag_data = entity.data.open_tag;
+                const tag_str = tag_data.name[0..tag_data.name_len];
+                const tag_id = try self.dom.interner.intern(tag_str);
+
+                const node = try self.allocator.create(MutableNode);
+                errdefer self.allocator.destroy(node);
+                node.* = MutableNode.init(self.allocator, .element, tag_id);
+
+                for (0..tag_data.attributes_len) |i| {
+                    const attr = tag_data.attributes[i];
+                    const name_str = attr.name[0..attr.name_len];
+                    const value_str = attr.value[0..attr.value_len];
+                    const name_id = try self.dom.interner.intern(name_str);
+                    const value_id = try self.dom.interner.intern(value_str);
+                    try node.attributes.append(.{ .name_id = name_id, .value_id = value_id });
+                }
+
+                if (self.root == null) {
+                    self.root = node;
+                } else if (self.stack.items.len > 0) {
+                    try self.stack.items[self.stack.items.len - 1].children.append(node);
+                } else {
+                    return error.MultipleRoots;
+                }
+                try self.stack.append(node);
+            },
+            .close_tag => {
+                _ = self.stack.pop();
+            },
+            .text, .cdata => {
+                const text_data = if (entity.tag == .text) entity.data.text else entity.data.cdata;
+                const text_str = text_data.value[0..(text_data.header[1] - text_data.header[0])];
+                if (text_str.len == 0) return;
+                if (self.stack.items.len == 0) return; // Ignore top-level text
+
+                const text_id = try self.dom.interner.intern(text_str);
+                const node = try self.allocator.create(MutableNode);
+                errdefer self.allocator.destroy(node);
+                node.* = MutableNode.init(self.allocator, .text, text_id);
+
+                try self.stack.items[self.stack.items.len - 1].children.append(node);
+            },
+            else => {}, // Ignore comments, processing instructions, etc.
+        }
+    }
+
+    pub fn build(self: *DomParser) !Document {
+        if (self.root == null) return error.NoRoot;
+        const root_idx = try self.freeze(self.root.?, InvalidIndex);
+        _ = try self.dom.updatePreorder(root_idx, 0);
+        return .{
+            .root = root_idx,
+            .nodes_len = @intCast(self.dom.nodes.items.len),
+            .children_len = @intCast(self.dom.children.items.len),
+            .attributes_len = @intCast(self.dom.attributes.items.len),
+            .generation = 1,
+        };
+    }
+
+    fn freeze(self: *DomParser, mnode: *MutableNode, parent: NodeIndex) !NodeIndex {
+        const idx = try self.dom.addNode(mnode.kind, mnode.tag, parent);
+        const attr_start: u32 = @intCast(self.dom.attributes.items.len);
+        try self.dom.attributes.appendSlice(mnode.attributes.items);
+        self.dom.nodes.items[idx].attributes_range = .{ .start = attr_start, .len = @intCast(mnode.attributes.items.len) };
+        const child_start: u32 = @intCast(self.dom.children.items.len);
+        for (mnode.children.items) |child| {
+            const child_idx = try self.freeze(child, idx);
+            try self.dom.children.append(child_idx);
+        }
+        self.dom.nodes.items[idx].children_range = .{ .start = child_start, .len = @intCast(mnode.children.items.len) };
+        return idx;
+    }
+};
+
+pub fn handlerCallback(context: ?*anyopaque, entity: Entity) callconv(.C) void {
+    const self: *DomParser = @ptrCast(@alignCast(context));
+    self.handleEvent(entity) catch {};
+}
+
+pub fn parseDom(dom: *DOM, xml: []const u8, allocator: Allocator) !Document {
+    var parser = DomParser.init(allocator, dom);
+    defer parser.deinit();
+    var sp = try SaxParser.init(allocator, &parser, handlerCallback);
+    defer sp.deinit();
+    try sp.write(xml);
+    return try parser.build();
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -288,3 +430,45 @@ pub fn main() !void {
 // TODO
 // If you want, I can next implement a Transformation struct that batches replaceChildren, setAttributes, and setText into a single pass over the tree so we only COW the path to the root once. That will give you true batched transformations.
 // Do you want me to add that batching layer next?
+
+const testing = std.testing;
+
+test "parse simple xml" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var dom = DOM.init(allocator);
+    defer dom.deinit();
+
+    const xml =
+        \\<?xml version="1.0" encoding="UTF-8"?><root id="1"><child class="test">Hello, <b>World</b>!</child></root>
+    ;
+
+    const doc = try parseDom(&dom, xml, allocator);
+
+    // Verify root
+    const root = dom.nodes.items[doc.root];
+    try testing.expectEqual(NodeKind.element, root.kind);
+    const root_tag = dom.interner.get(root.tag.?);
+    try testing.expectEqualStrings("root", root_tag);
+
+    // Root attributes
+    const root_attrs = dom.attributes.items[root.attributes_range.start..root.attributes_range.start + root.attributes_range.len];
+    try testing.expectEqual(@as(u32, 1), root.attributes_range.len);
+    try testing.expectEqualStrings("id", dom.interner.get(root_attrs[0].name_id));
+    try testing.expectEqualStrings("1", dom.interner.get(root_attrs[0].value_id));
+
+    std.debug.print("children range {d}\n", .{root.children_range.len});
+    try testing.expectEqual(1, root.children_range.len);
+
+    const child_idx = dom.children.items[root.children_range.start];
+    const child = dom.nodes.items[child_idx];
+
+    const b_idx = dom.children.items[child.children_range.start];
+    const b = dom.nodes.items[b_idx];
+    try testing.expectEqual(NodeKind.element, b.kind);
+    const b_tag = dom.interner.get(b.tag.?);
+    try testing.expectEqualStrings("b", b_tag);
+    try testing.expectEqual(@as(u32, 0), b.attributes_range.len);
+}
