@@ -6,8 +6,6 @@ const eval = @import("eval.zig");
 
 const Allocator = std.mem.Allocator;
 const Node = dom.Node;
-const Element = dom.Element;
-const Document = dom.Document;
 const NodeType = dom.NodeType;
 const NodeList = dom.NodeList;
 const NamedNodeMap = dom.NamedNodeMap;
@@ -258,8 +256,6 @@ pub export fn list_prepend(l_p: ?*anyopaque, item_p: ?*anyopaque) callconv(.C) i
 }
 
 // FFI for Sax
-
-// TODO
 
 // XPath
 
