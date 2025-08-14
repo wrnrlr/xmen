@@ -133,9 +133,10 @@ pub const SaxParser = struct {
                         }
 
                         self.tag_start_byte = self.pos;
-                        self.state = self.detectSpecialConstruct();
                         self.end_tag = false;
                         self.self_closing = false;
+                        self.attributes.clearRetainingCapacity();
+                        self.state = self.detectSpecialConstruct();
                         record_start = self.pos + 1;
 
                         // Skip the increment if we detected a special construct that moved pos

@@ -8,7 +8,7 @@ const InvalidIndex: NodeIndex = 0xffffffff;
 const InvalidString: StringId = 0xffffffff;
 
 const Range = struct { start: u32, len: u32 };
-const NodeKind = enum { element, text };
+const NodeKind = enum { element, text, cdata, comment, processing_instruction };
 
 const Attribute = struct {
     name_id: StringId,
@@ -17,7 +17,8 @@ const Attribute = struct {
 
 const Element = struct {
     kind: NodeKind,
-    tag: ?StringId,
+    tag: ?StringId = null,
+    content: ?StringId = null,
     attributes_range: Range,
     children_range: Range,
     parent: NodeIndex,
@@ -121,11 +122,12 @@ const DOM = struct {
         self.attributes.deinit();
     }
 
-    pub fn addNode(self: *DOM, kind: NodeKind, tag: ?StringId, parent: NodeIndex) !NodeIndex {
+    pub fn addNode(self: *DOM, kind: NodeKind, tag: ?StringId, content: ?StringId, parent: NodeIndex) !NodeIndex {
         const idx: NodeIndex = @intCast(self.nodes.items.len);
         try self.nodes.append(.{
             .kind = kind,
             .tag = tag,
+            .content = content,
             .attributes_range = .{ .start = 0, .len = 0 },
             .children_range = .{ .start = 0, .len = 0 },
             .parent = parent,
@@ -136,7 +138,7 @@ const DOM = struct {
     }
 
     pub fn createDocument(self: *DOM, root_kind: NodeKind, root_tag: ?StringId) !Document {
-        const root_idx = try self.addNode(root_kind, root_tag, InvalidIndex);
+        const root_idx = try self.addNode(root_kind, root_tag, null, InvalidIndex);
         return .{
             .root = root_idx,
             .nodes_len = 1,
@@ -238,21 +240,32 @@ const DOM = struct {
         try stack.append(node_idx);
         var next_preorder = start;
 
-        while (stack.items.len > 0) {
-            const idx = stack.pop() orelse unreachable;
+        while (stack.pop()) |idx| {
             var node = &self.nodes.items[idx];
             node.preorder = next_preorder;
             next_preorder += 1;
 
-            var child_count: u32 = 0;
             const cr = node.children_range;
-            for (self.children.items[cr.start .. cr.start + cr.len]) |c| {
+            var i = cr.len;
+            while (i > 0) : (i -= 1) {
+                const c = self.children.items[cr.start + i - 1];
                 try stack.append(c);
-                child_count += 1;
             }
-            node.subtree_size = child_count + 1;
         }
+
+        _ = self.computeSubtreeSize(node_idx);
+
         return next_preorder;
+    }
+
+    fn computeSubtreeSize(self: *DOM, node_idx: NodeIndex) u32 {
+        var size: u32 = 1;
+        const cr = self.nodes.items[node_idx].children_range;
+        for (self.children.items[cr.start .. cr.start + cr.len]) |c| {
+            size += self.computeSubtreeSize(c);
+        }
+        self.nodes.items[node_idx].subtree_size = size;
+        return size;
     }
 };
 
@@ -262,26 +275,81 @@ const Entity = sax.Entity;
 
 const MutableNode = struct {
     kind: NodeKind,
-    tag: ?StringId,
-    attributes: std.ArrayList(Attribute),
-    children: std.ArrayList(*MutableNode),
+    u: U,
 
-    pub fn init(allocator: Allocator, kind: NodeKind, tag: ?StringId) MutableNode {
-        return .{
-            .kind = kind,
-            .tag = tag,
-            .attributes = std.ArrayList(Attribute).init(allocator),
-            .children = std.ArrayList(*MutableNode).init(allocator),
+    const U = union(enum) {
+        element: struct {
+            tag: StringId,
+            attributes: std.ArrayList(Attribute),
+            children: std.ArrayList(*MutableNode),
+        },
+        text: struct { content: StringId },
+        cdata: struct { content: StringId },
+        comment: struct { content: StringId },
+        processing_instruction: struct { target: StringId, content: ?StringId },
+    };
+
+    pub fn initElement(allocator: Allocator, tag: StringId) !*MutableNode {
+        const self = try allocator.create(MutableNode);
+        self.* = .{
+            .kind = .element,
+            .u = .{ .element = .{
+                .tag = tag,
+                .attributes = std.ArrayList(Attribute).init(allocator),
+                .children = std.ArrayList(*MutableNode).init(allocator),
+            } },
         };
+        return self;
     }
 
-    pub fn deinit(self: *MutableNode) void {
-        for (self.children.items) |child| {
-            child.deinit();
-            self.children.allocator.destroy(child);
+    pub fn initText(allocator: Allocator, content: StringId) !*MutableNode {
+        const self = try allocator.create(MutableNode);
+        self.* = .{
+            .kind = .text,
+            .u = .{ .text = .{ .content = content } },
+        };
+        return self;
+    }
+
+    pub fn initCData(allocator: Allocator, content: StringId) !*MutableNode {
+        const self = try allocator.create(MutableNode);
+        self.* = .{
+            .kind = .cdata,
+            .u = .{ .cdata = .{ .content = content } },
+        };
+        return self;
+    }
+
+    pub fn initComment(allocator: Allocator, content: StringId) !*MutableNode {
+        const self = try allocator.create(MutableNode);
+        self.* = .{
+            .kind = .comment,
+            .u = .{ .comment = .{ .content = content } },
+        };
+        return self;
+    }
+
+    pub fn initPI(allocator: Allocator, target: StringId, content: ?StringId) !*MutableNode {
+        const self = try allocator.create(MutableNode);
+        self.* = .{
+            .kind = .processing_instruction,
+            .u = .{ .processing_instruction = .{ .target = target, .content = content } },
+        };
+        return self;
+    }
+
+    pub fn deinit(self: *MutableNode, allocator: Allocator) void {
+        switch (self.kind) {
+            .element => {
+                for (self.u.element.children.items) |child| {
+                    child.deinit(allocator);
+                    allocator.destroy(child);
+                }
+                self.u.element.children.deinit();
+                self.u.element.attributes.deinit();
+            },
+            else => {},
         }
-        self.children.deinit();
-        self.attributes.deinit();
     }
 };
 
@@ -290,6 +358,7 @@ const DomParser = struct {
     dom: *DOM,
     stack: std.ArrayList(*MutableNode),
     root: ?*MutableNode = null,
+    parse_error: ?anyerror = null,
 
     pub fn init(allocator: Allocator, dom: *DOM) DomParser {
         return .{
@@ -302,7 +371,7 @@ const DomParser = struct {
     pub fn deinit(self: *DomParser) void {
         self.stack.deinit();
         if (self.root) |r| {
-            r.deinit();
+            r.deinit(self.allocator);
             self.allocator.destroy(r);
         }
     }
@@ -314,9 +383,8 @@ const DomParser = struct {
                 const tag_str = tag_data.name[0..tag_data.name_len];
                 const tag_id = try self.dom.interner.intern(tag_str);
 
-                const node = try self.allocator.create(MutableNode);
+                const node = try MutableNode.initElement(self.allocator, tag_id);
                 errdefer self.allocator.destroy(node);
-                node.* = MutableNode.init(self.allocator, .element, tag_id);
 
                 for (0..tag_data.attributes_len) |i| {
                     const attr = tag_data.attributes[i];
@@ -324,35 +392,87 @@ const DomParser = struct {
                     const value_str = attr.value[0..attr.value_len];
                     const name_id = try self.dom.interner.intern(name_str);
                     const value_id = try self.dom.interner.intern(value_str);
-                    try node.attributes.append(.{ .name_id = name_id, .value_id = value_id });
+                    try node.u.element.attributes.append(.{ .name_id = name_id, .value_id = value_id });
                 }
 
                 if (self.root == null) {
                     self.root = node;
                 } else if (self.stack.items.len > 0) {
-                    try self.stack.items[self.stack.items.len - 1].children.append(node);
+                    try self.stack.items[self.stack.items.len - 1].u.element.children.append(node);
                 } else {
                     return error.MultipleRoots;
                 }
                 try self.stack.append(node);
             },
             .close_tag => {
+                if (self.stack.items.len == 0) {
+                    return error.UnexpectedCloseTag;
+                }
+                const tag_data = entity.data.close_tag;
+                const tag_str = tag_data.name[0..tag_data.name_len];
+                const actual_name = if (tag_str.len > 0 and tag_str[0] == '/') tag_str[1..] else tag_str;
+                const expected_tag_id = try self.dom.interner.intern(actual_name);
+                const current_node = self.stack.items[self.stack.items.len - 1];
+                if (current_node.kind != .element or current_node.u.element.tag != expected_tag_id) {
+                    return error.MismatchedCloseTag;
+                }
                 _ = self.stack.pop();
             },
-            .text, .cdata => {
-                const text_data = if (entity.tag == .text) entity.data.text else entity.data.cdata;
+            .text => {
+                const text_data = entity.data.text;
                 const text_str = text_data.value[0..(text_data.header[1] - text_data.header[0])];
                 if (text_str.len == 0) return;
                 if (self.stack.items.len == 0) return; // Ignore top-level text
 
                 const text_id = try self.dom.interner.intern(text_str);
-                const node = try self.allocator.create(MutableNode);
+                const node = try MutableNode.initText(self.allocator, text_id);
                 errdefer self.allocator.destroy(node);
-                node.* = MutableNode.init(self.allocator, .text, text_id);
 
-                try self.stack.items[self.stack.items.len - 1].children.append(node);
+                try self.stack.items[self.stack.items.len - 1].u.element.children.append(node);
             },
-            else => {}, // Ignore comments, processing instructions, etc.
+            .cdata => {
+                const cdata_data = entity.data.cdata;
+                const cdata_str = cdata_data.value[0..(cdata_data.header[1] - cdata_data.header[0])];
+                if (cdata_str.len == 0) return;
+                if (self.stack.items.len == 0) return;
+
+                const cdata_id = try self.dom.interner.intern(cdata_str);
+                const node = try MutableNode.initCData(self.allocator, cdata_id);
+                errdefer self.allocator.destroy(node);
+
+                try self.stack.items[self.stack.items.len - 1].u.element.children.append(node);
+            },
+            .comment => {
+                const comment_data = entity.data.comment;
+                const comment_str = comment_data.value[0..(comment_data.header[1] - comment_data.header[0])];
+                if (comment_str.len == 0) return;
+                if (self.stack.items.len == 0) return;
+
+                const comment_id = try self.dom.interner.intern(comment_str);
+                const node = try MutableNode.initComment(self.allocator, comment_id);
+                errdefer self.allocator.destroy(node);
+
+                try self.stack.items[self.stack.items.len - 1].u.element.children.append(node);
+            },
+            .processing_instruction => {
+                const pi_data = entity.data.processing_instruction;
+                const pi_str = pi_data.value[0..(pi_data.header[1] - pi_data.header[0])];
+                if (pi_str.len == 0) return;
+                if (self.stack.items.len == 0) return;
+
+                var target_str: []const u8 = pi_str;
+                var content_str: ?[]const u8 = null;
+                if (std.mem.indexOfScalar(u8, pi_str, ' ')) |space_idx| {
+                    target_str = pi_str[0..space_idx];
+                    content_str = std.mem.trim(u8, pi_str[space_idx + 1 ..], " \t\r\n");
+                }
+                const target_id = try self.dom.interner.intern(target_str);
+                const content_id = if (content_str) |cs| if (cs.len > 0) try self.dom.interner.intern(cs) else null else null;
+                const node = try MutableNode.initPI(self.allocator, target_id, content_id);
+                errdefer self.allocator.destroy(node);
+
+                try self.stack.items[self.stack.items.len - 1].u.element.children.append(node);
+            },
         }
     }
 
@@ -370,23 +490,48 @@ const DomParser = struct {
     }
 
     fn freeze(self: *DomParser, mnode: *MutableNode, parent: NodeIndex) !NodeIndex {
-        const idx = try self.dom.addNode(mnode.kind, mnode.tag, parent);
+        const tag = switch (mnode.kind) {
+            .element => mnode.u.element.tag,
+            .processing_instruction => mnode.u.processing_instruction.target,
+            else => null,
+        };
+        const content = switch (mnode.kind) {
+            .text => mnode.u.text.content,
+            .cdata => mnode.u.cdata.content,
+            .comment => mnode.u.comment.content,
+            .processing_instruction => mnode.u.processing_instruction.content,
+            else => null,
+        };
+        const idx = try self.dom.addNode(mnode.kind, tag, content, parent);
         const attr_start: u32 = @intCast(self.dom.attributes.items.len);
-        try self.dom.attributes.appendSlice(mnode.attributes.items);
-        self.dom.nodes.items[idx].attributes_range = .{ .start = attr_start, .len = @intCast(mnode.attributes.items.len) };
-        const child_start: u32 = @intCast(self.dom.children.items.len);
-        for (mnode.children.items) |child| {
+        const attrs = switch (mnode.kind) {
+            .element => mnode.u.element.attributes.items,
+            else => &[_]Attribute{},
+        };
+        try self.dom.attributes.appendSlice(attrs);
+        self.dom.nodes.items[idx].attributes_range = .{ .start = attr_start, .len = @intCast(attrs.len) };
+        var child_indices = std.ArrayList(NodeIndex).init(self.allocator);
+        defer child_indices.deinit();
+        const children = switch (mnode.kind) {
+            .element => mnode.u.element.children.items,
+            else => &[_]*MutableNode{},
+        };
+        for (children) |child| {
             const child_idx = try self.freeze(child, idx);
-            try self.dom.children.append(child_idx);
+            try child_indices.append(child_idx);
         }
-        self.dom.nodes.items[idx].children_range = .{ .start = child_start, .len = @intCast(mnode.children.items.len) };
+        const child_start: u32 = @intCast(self.dom.children.items.len);
+        try self.dom.children.appendSlice(child_indices.items);
+        self.dom.nodes.items[idx].children_range = .{ .start = child_start, .len = @intCast(child_indices.items.len) };
         return idx;
     }
 };
 
 pub fn handlerCallback(context: ?*anyopaque, entity: Entity) callconv(.C) void {
     const self: *DomParser = @ptrCast(@alignCast(context));
-    self.handleEvent(entity) catch {};
+    self.handleEvent(entity) catch |err| {
+        self.parse_error = err;
+    };
 }
 
 pub fn parseDom(dom: *DOM, xml: []const u8, allocator: Allocator) !Document {
@@ -395,6 +540,7 @@ pub fn parseDom(dom: *DOM, xml: []const u8, allocator: Allocator) !Document {
     var sp = try SaxParser.init(allocator, &parser, handlerCallback);
     defer sp.deinit();
     try sp.write(xml);
+    if (parser.parse_error) |err| return err;
     return try parser.build();
 }
 
@@ -411,7 +557,7 @@ pub fn main() !void {
     _ = try dom.interner.intern("Hello");
 
     const doc1 = try dom.createDocument(.element, tag_root);
-    const body_node = try dom.addNode(.element, tag_body, doc1.root);
+    const body_node = try dom.addNode(.element, tag_body, null, doc1.root);
 
     var batch = TransformBatch.init(allocator);
     defer batch.deinit();
@@ -426,10 +572,6 @@ pub fn main() !void {
 
     std.debug.print("Generation after batch: {}\n", .{ doc2.generation });
 }
-
-// TODO
-// If you want, I can next implement a Transformation struct that batches replaceChildren, setAttributes, and setText into a single pass over the tree so we only COW the path to the root once. That will give you true batched transformations.
-// Do you want me to add that batching layer next?
 
 const testing = std.testing;
 
@@ -459,16 +601,55 @@ test "parse simple xml" {
     try testing.expectEqualStrings("id", dom.interner.get(root_attrs[0].name_id));
     try testing.expectEqualStrings("1", dom.interner.get(root_attrs[0].value_id));
 
-    std.debug.print("children range {d}\n", .{root.children_range.len});
-    try testing.expectEqual(1, root.children_range.len);
+    try testing.expectEqual(@as(u32, 1), root.children_range.len);
 
     const child_idx = dom.children.items[root.children_range.start];
     const child = dom.nodes.items[child_idx];
+    try testing.expectEqual(NodeKind.element, child.kind);
+    const child_tag = dom.interner.get(child.tag.?);
+    try testing.expectEqualStrings("child", child_tag);
 
-    const b_idx = dom.children.items[child.children_range.start];
+    // Child attributes
+    const child_attrs = dom.attributes.items[child.attributes_range.start..child.attributes_range.start + child.attributes_range.len];
+    try testing.expectEqual(@as(u32, 1), child.attributes_range.len);
+    try testing.expectEqualStrings("class", dom.interner.get(child_attrs[0].name_id));
+    try testing.expectEqualStrings("test", dom.interner.get(child_attrs[0].value_id));
+
+    try testing.expectEqual(@as(u32, 3), child.children_range.len);
+
+    // First text: "Hello, "
+    const text1_idx = dom.children.items[child.children_range.start];
+    const text1 = dom.nodes.items[text1_idx];
+    try testing.expectEqual(NodeKind.text, text1.kind);
+    try testing.expect(text1.tag == null);
+    try testing.expectEqualStrings("Hello, ", dom.interner.get(text1.content.?));
+    try testing.expectEqual(@as(u32, 0), text1.attributes_range.len);
+    try testing.expectEqual(@as(u32, 0), text1.children_range.len);
+
+    // Element b
+    const b_idx = dom.children.items[child.children_range.start + 1];
     const b = dom.nodes.items[b_idx];
     try testing.expectEqual(NodeKind.element, b.kind);
     const b_tag = dom.interner.get(b.tag.?);
     try testing.expectEqualStrings("b", b_tag);
     try testing.expectEqual(@as(u32, 0), b.attributes_range.len);
+    try testing.expectEqual(@as(u32, 1), b.children_range.len);
+
+    // b's text: "World"
+    const b_text_idx = dom.children.items[b.children_range.start];
+    const b_text = dom.nodes.items[b_text_idx];
+    try testing.expectEqual(NodeKind.text, b_text.kind);
+    try testing.expect(b_text.tag == null);
+    try testing.expectEqualStrings("World", dom.interner.get(b_text.content.?));
+    try testing.expectEqual(@as(u32, 0), b_text.attributes_range.len);
+    try testing.expectEqual(@as(u32, 0), b_text.children_range.len);
+
+    // Second text: "!"
+    const text2_idx = dom.children.items[child.children_range.start + 2];
+    const text2 = dom.nodes.items[text2_idx];
+    try testing.expectEqual(NodeKind.text, text2.kind);
+    try testing.expect(text2.tag == null);
+    try testing.expectEqualStrings("!", dom.interner.get(text2.content.?));
+    try testing.expectEqual(@as(u32, 0), text2.attributes_range.len);
+    try testing.expectEqual(@as(u32, 0), text2.children_range.len);
 }
