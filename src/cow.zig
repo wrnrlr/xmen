@@ -1,0 +1,1180 @@
+const std = @import("std");
+const ArrayList = std.ArrayList;
+const Allocator = std.mem.Allocator;
+const testing = std.testing;
+
+// String interning for efficient string storage
+const StringPool = struct {
+    strings: ArrayList([]const u8),
+    map: std.HashMap([]const u8, u32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+
+    const Self = @This();
+
+    pub fn init(allocator: Allocator) Self {
+        return Self{
+            .strings = ArrayList([]const u8).init(allocator),
+            .map = std.HashMap([]const u8, u32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.strings.items) |str| {
+            self.strings.allocator.free(str);
+        }
+        self.strings.deinit();
+        self.map.deinit();
+    }
+
+    pub fn intern(self: *Self, str: []const u8) !u32 {
+        if (self.map.get(str)) |id| {
+            return id;
+        }
+
+        const owned_str = try self.strings.allocator.dupe(u8, str);
+        const id: u32 = @intCast(self.strings.items.len);
+        try self.strings.append(owned_str);
+        try self.map.put(owned_str, id);
+        return id;
+    }
+
+    pub fn getString(self: *const Self, id: u32) []const u8 {
+        return self.strings.items[id];
+    }
+};
+
+// Node types
+const NodeType = enum(u8) {
+    element = 1,
+    attribute = 2,
+    text = 3,
+    cdata = 4,
+    proc_inst = 7,
+    comment = 8,
+    document = 9,
+};
+
+// Forward star representation for tree structure
+const NodeData = struct {
+    node_type: NodeType,
+    tag_name: u32, // interned string id, 0 for non-element nodes
+    text_content: u32, // interned string id, 0 for non-text nodes
+    parent: u32, // index in nodes array, 0 means no parent
+    first_child: u32, // index in nodes array, 0 means no children
+    last_child: u32, // index in nodes array, 0 means no children
+    next_sibling: u32, // index in nodes array, 0 means no next sibling
+    first_attribute: u32, // index in nodes array, 0 means no attributes
+    last_attribute: u32, // index in nodes array, 0 means no attributes
+};
+
+// Transformation actions for copy-on-write operations
+const ActionType = enum {
+    CreateDocument,
+    CreateElement,
+    CreateAttribute,
+    CreateText,
+    CreateCDATA,
+    CreateProcessingInstruction,
+    CreateComment,
+    AppendChild,
+    PrependChild,
+    RemoveChild,
+    SetAttribute,
+    RemoveAttribute,
+};
+
+const Action = struct {
+    action_type: ActionType,
+    target_node: u32, // node index
+    new_node: u32, // for append/prepend/remove child operations
+    tag_name: u32, // for create element/attribute/proc_inst
+    text_content: u32, // for create text/cdata/comment/attribute/proc_inst
+    attr_name: u32, // for attribute operations
+    attr_value: u32, // for set attribute
+};
+
+// Main DOM World - copy-on-write container
+const DOMWorld = struct {
+    // Core data
+    nodes: ArrayList(NodeData),
+    string_pool: StringPool,
+
+    // Transformation tracking
+    version: u32,
+    actions: ArrayList(Action),
+
+    // Node allocation
+    next_node_id: u32,
+
+    const Self = @This();
+
+    pub fn init(allocator: Allocator) !Self {
+        var res = Self{
+            .nodes = ArrayList(NodeData).init(allocator),
+            .string_pool = StringPool.init(allocator),
+            .version = 0,
+            .actions = ArrayList(Action).init(allocator),
+            .next_node_id = 1, // 0 is reserved for "null" references
+        };
+        const empty = try allocator.dupe(u8, "");
+        try res.string_pool.strings.append(empty);
+        return res;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.nodes.deinit();
+        self.string_pool.deinit();
+        self.actions.deinit();
+    }
+
+    // Create a new world by applying transformations (copy-on-write)
+    pub fn transform(self: *const Self, new_actions: []const Action, allocator: Allocator) !Self {
+        var new_world = Self{
+            .nodes = ArrayList(NodeData).init(allocator),
+            .string_pool = StringPool.init(allocator),
+            .version = self.version + 1,
+            .actions = ArrayList(Action).init(allocator),
+            .next_node_id = self.next_node_id,
+        };
+
+        // Copy existing state
+        try new_world.nodes.appendSlice(self.nodes.items);
+
+        // Share string pool more efficiently - copy the data structures
+        for (self.string_pool.strings.items) |str| {
+            const owned_copy = try allocator.dupe(u8, str);
+            try new_world.string_pool.strings.append(owned_copy);
+        }
+
+        // Copy the hash map entries using the new string references
+        var iterator = self.string_pool.map.iterator();
+        while (iterator.next()) |entry| {
+            const new_str = new_world.string_pool.strings.items[entry.value_ptr.*];
+            try new_world.string_pool.map.put(new_str, entry.value_ptr.*);
+        }
+
+        // Copy existing actions
+        try new_world.actions.appendSlice(self.actions.items);
+
+        // Apply new actions
+        for (new_actions) |action| {
+            try new_world.applyAction(action);
+        }
+
+        return new_world;
+    }
+
+    fn applyAction(self: *Self, action: Action) !void {
+        switch (action.action_type) {
+            .CreateDocument => {
+                const node_data = NodeData{
+                    .node_type = .document,
+                    .tag_name = 0,
+                    .text_content = 0,
+                    .parent = 0,
+                    .first_child = 0,
+                    .last_child = 0,
+                    .next_sibling = 0,
+                    .first_attribute = 0,
+                    .last_attribute = 0,
+                };
+                try self.createNodeAt(action.target_node, node_data);
+            },
+            .CreateElement => {
+                const node_data = NodeData{
+                    .node_type = .element,
+                    .tag_name = action.tag_name,
+                    .text_content = 0,
+                    .parent = 0,
+                    .first_child = 0,
+                    .last_child = 0,
+                    .next_sibling = 0,
+                    .first_attribute = 0,
+                    .last_attribute = 0,
+                };
+                try self.createNodeAt(action.target_node, node_data);
+            },
+            .CreateAttribute => {
+                const node_data = NodeData{
+                    .node_type = .attribute,
+                    .tag_name = action.tag_name,
+                    .text_content = action.text_content,
+                    .parent = 0,
+                    .first_child = 0,
+                    .last_child = 0,
+                    .next_sibling = 0,
+                    .first_attribute = 0,
+                    .last_attribute = 0,
+                };
+                try self.createNodeAt(action.target_node, node_data);
+            },
+            .CreateText => {
+                const node_data = NodeData{
+                    .node_type = .text,
+                    .tag_name = 0,
+                    .text_content = action.text_content,
+                    .parent = 0,
+                    .first_child = 0,
+                    .last_child = 0,
+                    .next_sibling = 0,
+                    .first_attribute = 0,
+                    .last_attribute = 0,
+                };
+                try self.createNodeAt(action.target_node, node_data);
+            },
+            .CreateCDATA => {
+                const node_data = NodeData{
+                    .node_type = .cdata,
+                    .tag_name = 0,
+                    .text_content = action.text_content,
+                    .parent = 0,
+                    .first_child = 0,
+                    .last_child = 0,
+                    .next_sibling = 0,
+                    .first_attribute = 0,
+                    .last_attribute = 0,
+                };
+                try self.createNodeAt(action.target_node, node_data);
+            },
+            .CreateProcessingInstruction => {
+                const node_data = NodeData{
+                    .node_type = .proc_inst,
+                    .tag_name = action.tag_name,
+                    .text_content = action.text_content,
+                    .parent = 0,
+                    .first_child = 0,
+                    .last_child = 0,
+                    .next_sibling = 0,
+                    .first_attribute = 0,
+                    .last_attribute = 0,
+                };
+                try self.createNodeAt(action.target_node, node_data);
+            },
+            .CreateComment => {
+                const node_data = NodeData{
+                    .node_type = .comment,
+                    .tag_name = 0,
+                    .text_content = action.text_content,
+                    .parent = 0,
+                    .first_child = 0,
+                    .last_child = 0,
+                    .next_sibling = 0,
+                    .first_attribute = 0,
+                    .last_attribute = 0,
+                };
+                try self.createNodeAt(action.target_node, node_data);
+            },
+            .AppendChild => {
+                try self.appendChildInternal(action.target_node, action.new_node);
+            },
+            .PrependChild => {
+                try self.prependChildInternal(action.target_node, action.new_node);
+            },
+            .RemoveChild => {
+                try self.removeChildInternal(action.target_node, action.new_node);
+            },
+            .SetAttribute => {
+                try self.setAttributeInternal(action.target_node, action.attr_name, action.attr_value);
+            },
+            .RemoveAttribute => {
+                try self.removeAttributeInternal(action.target_node, action.attr_name);
+            },
+        }
+
+        try self.actions.append(action);
+    }
+
+    fn createNodeAt(self: *Self, node_id: u32, node_data: NodeData) !void {
+        // Ensure array is large enough to hold node at node_id index (1-based)
+        const dummy = NodeData{
+            .node_type = .document,
+            .tag_name = 0,
+            .text_content = 0,
+            .parent = 0,
+            .first_child = 0,
+            .last_child = 0,
+            .next_sibling = 0,
+            .first_attribute = 0,
+            .last_attribute = 0,
+        };
+        while (self.nodes.items.len < node_id) {
+            try self.nodes.append(dummy);
+        }
+        self.nodes.items[node_id - 1] = node_data;
+    }
+
+    fn appendChildInternal(self: *Self, parent_id: u32, child_id: u32) !void {
+        if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len) {
+            return error.InvalidNodeIndex;
+        }
+
+        const parent_idx = parent_id - 1;
+        const child_idx = child_id - 1;
+
+        self.nodes.items[child_idx].parent = parent_id;
+        self.nodes.items[child_idx].next_sibling = 0;
+
+        if (self.nodes.items[parent_idx].first_child == 0) {
+            self.nodes.items[parent_idx].first_child = child_id;
+            self.nodes.items[parent_idx].last_child = child_id;
+        } else {
+            const last_idx = self.nodes.items[parent_idx].last_child - 1;
+            self.nodes.items[last_idx].next_sibling = child_id;
+            self.nodes.items[parent_idx].last_child = child_id;
+        }
+    }
+
+    fn prependChildInternal(self: *Self, parent_id: u32, child_id: u32) !void {
+        if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len) {
+            return error.InvalidNodeIndex;
+        }
+
+        const parent_idx = parent_id - 1;
+        const child_idx = child_id - 1;
+
+        self.nodes.items[child_idx].parent = parent_id;
+
+        const old_first = self.nodes.items[parent_idx].first_child;
+        self.nodes.items[child_idx].next_sibling = old_first;
+        self.nodes.items[parent_idx].first_child = child_id;
+
+        if (self.nodes.items[parent_idx].last_child == 0) {
+            self.nodes.items[parent_idx].last_child = child_id;
+        }
+    }
+
+    fn removeChildInternal(self: *Self, parent_id: u32, child_id: u32) !void {
+        if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len) {
+            return error.InvalidNodeIndex;
+        }
+
+        const parent_idx = parent_id - 1;
+
+        var current = self.nodes.items[parent_idx].first_child;
+        var prev: u32 = 0;
+        while (current != 0) {
+            if (current == child_id) {
+                const current_idx = current - 1;
+                const next = self.nodes.items[current_idx].next_sibling;
+
+                if (prev == 0) {
+                    self.nodes.items[parent_idx].first_child = next;
+                } else {
+                    self.nodes.items[prev - 1].next_sibling = next;
+                }
+
+                if (self.nodes.items[parent_idx].last_child == child_id) {
+                    self.nodes.items[parent_idx].last_child = prev;
+                }
+
+                self.nodes.items[current_idx].parent = 0;
+                self.nodes.items[current_idx].next_sibling = 0;
+                return;
+            }
+
+            prev = current;
+            current = self.nodes.items[current - 1].next_sibling;
+        }
+
+        return error.ChildNotFound;
+    }
+
+    fn setAttributeInternal(self: *Self, element_id: u32, attr_name_id: u32, attr_value_id: u32) !void {
+        if (element_id == 0 or element_id > self.nodes.items.len) {
+            return error.InvalidNodeIndex;
+        }
+
+        const element_idx = element_id - 1;
+
+        // Check if attribute exists
+        var current = self.nodes.items[element_idx].first_attribute;
+        var prev: u32 = 0;
+        while (current != 0) {
+            const attr_idx = current - 1;
+            if (self.nodes.items[attr_idx].tag_name == attr_name_id) {
+                self.nodes.items[attr_idx].text_content = attr_value_id;
+                return;
+            }
+            prev = current;
+            current = self.nodes.items[attr_idx].next_sibling;
+        }
+
+        // Create new attribute node
+        const new_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        const dummy = NodeData{
+            .node_type = .document,
+            .tag_name = 0,
+            .text_content = 0,
+            .parent = 0,
+            .first_child = 0,
+            .last_child = 0,
+            .next_sibling = 0,
+            .first_attribute = 0,
+            .last_attribute = 0,
+        };
+        while (self.nodes.items.len < new_id) {
+            try self.nodes.append(dummy);
+        }
+
+        const attr_data = NodeData{
+            .node_type = .attribute,
+            .tag_name = attr_name_id,
+            .text_content = attr_value_id,
+            .parent = element_id,
+            .first_child = 0,
+            .last_child = 0,
+            .next_sibling = 0,
+            .first_attribute = 0,
+            .last_attribute = 0,
+        };
+        self.nodes.items[new_id - 1] = attr_data;
+
+        // Append to attribute list
+        if (self.nodes.items[element_idx].first_attribute == 0) {
+            self.nodes.items[element_idx].first_attribute = new_id;
+            self.nodes.items[element_idx].last_attribute = new_id;
+        } else {
+            const last_idx = self.nodes.items[element_idx].last_attribute - 1;
+            self.nodes.items[last_idx].next_sibling = new_id;
+            self.nodes.items[element_idx].last_attribute = new_id;
+        }
+    }
+
+    fn removeAttributeInternal(self: *Self, element_id: u32, attr_name_id: u32) !void {
+        if (element_id == 0 or element_id > self.nodes.items.len) {
+            return error.InvalidNodeIndex;
+        }
+
+        const element_idx = element_id - 1;
+
+        var current = self.nodes.items[element_idx].first_attribute;
+        var prev: u32 = 0;
+        while (current != 0) {
+            const attr_idx = current - 1;
+            if (self.nodes.items[attr_idx].tag_name == attr_name_id) {
+                const next = self.nodes.items[attr_idx].next_sibling;
+
+                if (prev == 0) {
+                    self.nodes.items[element_idx].first_attribute = next;
+                } else {
+                    self.nodes.items[prev - 1].next_sibling = next;
+                }
+
+                if (self.nodes.items[element_idx].last_attribute == current) {
+                    self.nodes.items[element_idx].last_attribute = prev;
+                }
+
+                self.nodes.items[attr_idx].parent = 0;
+                self.nodes.items[attr_idx].next_sibling = 0;
+                return;
+            }
+            prev = current;
+            current = self.nodes.items[attr_idx].next_sibling;
+        }
+
+        // Attribute not found, do nothing
+    }
+
+    // Helper functions for creating actions
+    pub fn createDocumentAction(self: *Self) !struct { action: Action, node_id: u32 } {
+        const node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        return .{
+            .action = Action{
+                .action_type = .CreateDocument,
+                .target_node = node_id,
+                .new_node = 0,
+                .tag_name = 0,
+                .text_content = 0,
+                .attr_name = 0,
+                .attr_value = 0,
+            },
+            .node_id = node_id,
+        };
+    }
+
+    pub fn createElementAction(self: *Self, tag_name: []const u8) !struct { action: Action, node_id: u32 } {
+        const tag_id = try self.string_pool.intern(tag_name);
+        const node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        return .{
+            .action = Action{
+                .action_type = .CreateElement,
+                .target_node = node_id,
+                .new_node = 0,
+                .tag_name = tag_id,
+                .text_content = 0,
+                .attr_name = 0,
+                .attr_value = 0,
+            },
+            .node_id = node_id,
+        };
+    }
+
+    pub fn createAttributeAction(self: *Self, name: []const u8, value: []const u8) !struct { action: Action, node_id: u32 } {
+        const name_id = try self.string_pool.intern(name);
+        const value_id = try self.string_pool.intern(value);
+        const node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        return .{
+            .action = Action{
+                .action_type = .CreateAttribute,
+                .target_node = node_id,
+                .new_node = 0,
+                .tag_name = name_id,
+                .text_content = value_id,
+                .attr_name = 0,
+                .attr_value = 0,
+            },
+            .node_id = node_id,
+        };
+    }
+
+    pub fn createTextAction(self: *Self, text: []const u8) !struct { action: Action, node_id: u32 } {
+        const text_id = try self.string_pool.intern(text);
+        const node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        return .{
+            .action = Action{
+                .action_type = .CreateText,
+                .target_node = node_id,
+                .new_node = 0,
+                .tag_name = 0,
+                .text_content = text_id,
+                .attr_name = 0,
+                .attr_value = 0,
+            },
+            .node_id = node_id,
+        };
+    }
+
+    pub fn createCDATASectionAction(self: *Self, data: []const u8) !struct { action: Action, node_id: u32 } {
+        const data_id = try self.string_pool.intern(data);
+        const node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        return .{
+            .action = Action{
+                .action_type = .CreateCDATA,
+                .target_node = node_id,
+                .new_node = 0,
+                .tag_name = 0,
+                .text_content = data_id,
+                .attr_name = 0,
+                .attr_value = 0,
+            },
+            .node_id = node_id,
+        };
+    }
+
+    pub fn createProcessingInstructionAction(self: *Self, target: []const u8, data: []const u8) !struct { action: Action, node_id: u32 } {
+        const target_id = try self.string_pool.intern(target);
+        const data_id = try self.string_pool.intern(data);
+        const node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        return .{
+            .action = Action{
+                .action_type = .CreateProcessingInstruction,
+                .target_node = node_id,
+                .new_node = 0,
+                .tag_name = target_id,
+                .text_content = data_id,
+                .attr_name = 0,
+                .attr_value = 0,
+            },
+            .node_id = node_id,
+        };
+    }
+
+    pub fn createCommentAction(self: *Self, data: []const u8) !struct { action: Action, node_id: u32 } {
+        const data_id = try self.string_pool.intern(data);
+        const node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        return .{
+            .action = Action{
+                .action_type = .CreateComment,
+                .target_node = node_id,
+                .new_node = 0,
+                .tag_name = 0,
+                .text_content = data_id,
+                .attr_name = 0,
+                .attr_value = 0,
+            },
+            .node_id = node_id,
+        };
+    }
+
+    pub fn appendChildAction(parent_id: u32, child_id: u32) Action {
+        return Action{
+            .action_type = .AppendChild,
+            .target_node = parent_id,
+            .new_node = child_id,
+            .tag_name = 0,
+            .text_content = 0,
+            .attr_name = 0,
+            .attr_value = 0,
+        };
+    }
+
+    pub fn prependChildAction(parent_id: u32, child_id: u32) Action {
+        return Action{
+            .action_type = .PrependChild,
+            .target_node = parent_id,
+            .new_node = child_id,
+            .tag_name = 0,
+            .text_content = 0,
+            .attr_name = 0,
+            .attr_value = 0,
+        };
+    }
+
+    pub fn removeChildAction(parent_id: u32, child_id: u32) Action {
+        return Action{
+            .action_type = .RemoveChild,
+            .target_node = parent_id,
+            .new_node = child_id,
+            .tag_name = 0,
+            .text_content = 0,
+            .attr_name = 0,
+            .attr_value = 0,
+        };
+    }
+
+    pub fn setAttributeAction(self: *Self, element_id: u32, name: []const u8, value: []const u8) !Action {
+        const name_id = try self.string_pool.intern(name);
+        const value_id = try self.string_pool.intern(value);
+
+        return Action{
+            .action_type = .SetAttribute,
+            .target_node = element_id,
+            .new_node = 0,
+            .tag_name = 0,
+            .text_content = 0,
+            .attr_name = name_id,
+            .attr_value = value_id,
+        };
+    }
+
+    pub fn removeAttributeAction(self: *Self, element_id: u32, name: []const u8) !Action {
+        const name_id = try self.string_pool.intern(name);
+
+        return Action{
+            .action_type = .RemoveAttribute,
+            .target_node = element_id,
+            .new_node = 0,
+            .tag_name = 0,
+            .text_content = 0,
+            .attr_name = name_id,
+            .attr_value = 0,
+        };
+    }
+
+    // Query helpers
+    pub fn getNode(self: *const Self, node_id: u32) ?*const NodeData {
+        if (node_id == 0 or node_id > self.nodes.items.len) return null;
+        return &self.nodes.items[node_id - 1]; // node_id is 1-based
+    }
+
+    pub fn getTagName(self: *const Self, node_id: u32) ?[]const u8 {
+        if (self.getNode(node_id)) |node| {
+            if (node.tag_name != 0) {
+                return self.string_pool.getString(node.tag_name);
+            }
+        }
+        return null;
+    }
+
+    pub fn getTextContent(self: *const Self, node_id: u32) ?[]const u8 {
+        if (self.getNode(node_id)) |node| {
+            if (node.text_content != 0) {
+                return self.string_pool.getString(node.text_content);
+            }
+        }
+        return null;
+    }
+};
+
+// Node wrapper
+const Node = struct {
+    world: *const DOMWorld,
+    id: u32,
+
+    pub fn nodeType(self: Node) NodeType {
+        return self.world.nodes.items[self.id - 1].node_type;
+    }
+
+    pub fn parentNode(self: Node) ?Node {
+        const parent_id = self.world.nodes.items[self.id - 1].parent;
+        if (parent_id == 0) return null;
+        return Node{ .world = self.world, .id = parent_id };
+    }
+
+    pub fn firstChild(self: Node) ?Node {
+        const child_id = self.world.nodes.items[self.id - 1].first_child;
+        if (child_id == 0) return null;
+        return Node{ .world = self.world, .id = child_id };
+    }
+
+    pub fn lastChild(self: Node) ?Node {
+        const child_id = self.world.nodes.items[self.id - 1].last_child;
+        if (child_id == 0) return null;
+        return Node{ .world = self.world, .id = child_id };
+    }
+
+    pub fn nextSibling(self: Node) ?Node {
+        const sibling_id = self.world.nodes.items[self.id - 1].next_sibling;
+        if (sibling_id == 0) return null;
+        return Node{ .world = self.world, .id = sibling_id };
+    }
+
+    pub fn childNodes(self: Node) NodeList {
+        return NodeList{ .world = self.world, .parent_id = self.id };
+    }
+};
+
+// NodeList implementation
+const NodeList = struct {
+    world: *const DOMWorld,
+    parent_id: u32,
+
+    pub fn length(self: NodeList) u32 {
+        var count: u32 = 0;
+        var current = self.world.nodes.items[self.parent_id - 1].first_child;
+        while (current != 0) {
+            count += 1;
+            current = self.world.nodes.items[current - 1].next_sibling;
+        }
+        return count;
+    }
+
+    pub fn item(self: NodeList, index: u32) ?Node {
+        var current = self.world.nodes.items[self.parent_id - 1].first_child;
+        var i: u32 = 0;
+        while (current != 0) {
+            if (i == index) {
+                return Node{ .world = self.world, .id = current };
+            }
+            i += 1;
+            current = self.world.nodes.items[current - 1].next_sibling;
+        }
+        return null;
+    }
+};
+
+// NamedNodeMap implementation
+const NamedNodeMap = struct {
+    world: *const DOMWorld,
+    element_id: u32,
+
+    pub fn length(self: NamedNodeMap) u32 {
+        var count: u32 = 0;
+        var current = self.world.nodes.items[self.element_id - 1].first_attribute;
+        while (current != 0) {
+            count += 1;
+            current = self.world.nodes.items[current - 1].next_sibling;
+        }
+        return count;
+    }
+
+    pub fn item(self: NamedNodeMap, index: u32) ?Node {
+        var current = self.world.nodes.items[self.element_id - 1].first_attribute;
+        var i: u32 = 0;
+        while (current != 0) {
+            if (i == index) {
+                return Node{ .world = self.world, .id = current };
+            }
+            i += 1;
+            current = self.world.nodes.items[current - 1].next_sibling;
+        }
+        return null;
+    }
+
+    pub fn getNamedItem(self: NamedNodeMap, name: []const u8) ?Node {
+        var current = self.world.nodes.items[self.element_id - 1].first_attribute;
+        while (current != 0) {
+            const attr_idx = current - 1;
+            const attr_name = self.world.string_pool.getString(self.world.nodes.items[attr_idx].tag_name);
+            if (std.mem.eql(u8, attr_name, name)) {
+                return Node{ .world = self.world, .id = current };
+            }
+            current = self.world.nodes.items[attr_idx].next_sibling;
+        }
+        return null;
+    }
+};
+
+test "append doc with elem" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    // Create actions in the original world (this sets up string pool)
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    const elem_result = try world.createElementAction("div");
+    const elem_id = elem_result.node_id;
+
+    // Apply transformations to create new world
+    const actions = [_]Action{ doc_result.action, elem_result.action, DOMWorld.appendChildAction(doc_id, elem_id) };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    // Verify structure
+    const doc_node = new_world.getNode(doc_id).?;
+    const elem_node = new_world.getNode(elem_id).?;
+
+    try testing.expect(doc_node.node_type == .document);
+    try testing.expect(doc_node.first_child == elem_id);
+    try testing.expect(elem_node.node_type == .element);
+    try testing.expect(elem_node.parent == doc_id);
+    try testing.expectEqualStrings("div", new_world.getTagName(elem_id).?);
+}
+
+test "append doc with text" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    // Create document
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    // Create text node
+    const text_result = try world.createTextAction("Hello World");
+    const text_id = text_result.node_id;
+
+    // Apply transformations
+    const actions = [_]Action{ doc_result.action, text_result.action, DOMWorld.appendChildAction(doc_id, text_id) };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    // Verify structure
+    const doc_node = new_world.getNode(doc_id).?;
+    const text_node = new_world.getNode(text_id).?;
+
+    try testing.expect(doc_node.node_type == .document);
+    try testing.expect(doc_node.first_child == text_id);
+    try testing.expect(text_node.node_type == .text);
+    try testing.expect(text_node.parent == doc_id);
+    try testing.expectEqualStrings("Hello World", new_world.getTextContent(text_id).?);
+}
+
+test "prepend doc with text" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    // Create document
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    // Create first element
+    const elem_result = try world.createElementAction("div");
+    const elem_id = elem_result.node_id;
+
+    // Create text node
+    const text_result = try world.createTextAction("Hello");
+    const text_id = text_result.node_id;
+
+    // Apply transformations: append element first, then prepend text
+    const actions = [_]Action{
+        doc_result.action,
+        elem_result.action,
+        text_result.action,
+        DOMWorld.appendChildAction(doc_id, elem_id),
+        DOMWorld.prependChildAction(doc_id, text_id),
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    // Verify structure - text should be first, div should be second
+    const doc_node = new_world.getNode(doc_id).?;
+    try testing.expect(doc_node.first_child == text_id);
+
+    const text_node = new_world.getNode(text_id).?;
+    try testing.expect(text_node.next_sibling == elem_id);
+    try testing.expectEqualStrings("Hello", new_world.getTextContent(text_id).?);
+}
+
+test "append elem with elem" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    // Create document
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    // Create parent element
+    const parent_result = try world.createElementAction("div");
+    const parent_id = parent_result.node_id;
+
+    // Create child element
+    const child_result = try world.createElementAction("span");
+    const child_id = child_result.node_id;
+
+    // Apply transformations
+    const actions = [_]Action{
+        doc_result.action,
+        parent_result.action,
+        child_result.action,
+        DOMWorld.appendChildAction(doc_id, parent_id),
+        DOMWorld.appendChildAction(parent_id, child_id),
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    // Verify structure
+    const parent_node = new_world.getNode(parent_id).?;
+    const child_node = new_world.getNode(child_id).?;
+
+    try testing.expect(parent_node.first_child == child_id);
+    try testing.expect(child_node.parent == parent_id);
+    try testing.expectEqualStrings("div", new_world.getTagName(parent_id).?);
+    try testing.expectEqualStrings("span", new_world.getTagName(child_id).?);
+}
+
+test "append elem with text" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    // Create document
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    // Create element
+    const elem_result = try world.createElementAction("p");
+    const elem_id = elem_result.node_id;
+
+    // Create text node
+    const text_result = try world.createTextAction("Content");
+    const text_id = text_result.node_id;
+
+    // Apply transformations
+    const actions = [_]Action{
+        doc_result.action,
+        elem_result.action,
+        text_result.action,
+        DOMWorld.appendChildAction(doc_id, elem_id),
+        DOMWorld.appendChildAction(elem_id, text_id),
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    // Verify structure
+    const elem_node = new_world.getNode(elem_id).?;
+    const text_node = new_world.getNode(text_id).?;
+
+    try testing.expect(elem_node.first_child == text_id);
+    try testing.expect(text_node.parent == elem_id);
+    try testing.expectEqualStrings("Content", new_world.getTextContent(text_id).?);
+}
+
+test "prepend elem with elem" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    // Create document
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    // Create parent element
+    const parent_result = try world.createElementAction("ul");
+    const parent_id = parent_result.node_id;
+
+    // Create first child element
+    const child1_result = try world.createElementAction("li");
+    const child1_id = child1_result.node_id;
+
+    // Create second child element
+    const child2_result = try world.createElementAction("li");
+    const child2_id = child2_result.node_id;
+
+    // Apply transformations: append first child, then prepend second child
+    const actions = [_]Action{
+        doc_result.action,
+        parent_result.action,
+        child1_result.action,
+        child2_result.action,
+        DOMWorld.appendChildAction(doc_id, parent_id),
+        DOMWorld.appendChildAction(parent_id, child1_id),
+        DOMWorld.prependChildAction(parent_id, child2_id),
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    // Verify structure - child2 should be first, child1 should be second
+    const parent_node = new_world.getNode(parent_id).?;
+    try testing.expect(parent_node.first_child == child2_id);
+
+    const child2_node = new_world.getNode(child2_id).?;
+    try testing.expect(child2_node.next_sibling == child1_id);
+    try testing.expect(child2_node.parent == parent_id);
+}
+
+test "prepend elem with text" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    // Create document
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    // Create element
+    const elem_result = try world.createElementAction("h1");
+    const elem_id = elem_result.node_id;
+
+    // Create first text node
+    const text1_result = try world.createTextAction("World");
+    const text1_id = text1_result.node_id;
+
+    // Create second text node
+    const text2_result = try world.createTextAction("Hello ");
+    const text2_id = text2_result.node_id;
+
+    // Apply transformations: append first text, then prepend second text
+    const actions = [_]Action{
+        doc_result.action,
+        elem_result.action,
+        text1_result.action,
+        text2_result.action,
+        DOMWorld.appendChildAction(doc_id, elem_id),
+        DOMWorld.appendChildAction(elem_id, text1_id),
+        DOMWorld.prependChildAction(elem_id, text2_id),
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    // Verify structure - "Hello " should be first, "World" should be second
+    const elem_node = new_world.getNode(elem_id).?;
+    try testing.expect(elem_node.first_child == text2_id);
+
+    const text2_node = new_world.getNode(text2_id).?;
+    try testing.expect(text2_node.next_sibling == text1_id);
+    try testing.expectEqualStrings("Hello ", new_world.getTextContent(text2_id).?);
+    try testing.expectEqualStrings("World", new_world.getTextContent(text1_id).?);
+}
+
+test "set attribute on element" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    const elem_result = try world.createElementAction("div");
+    const elem_id = elem_result.node_id;
+
+    const set_attr = try world.setAttributeAction(elem_id, "class", "container");
+
+    const actions = [_]Action{
+        doc_result.action,
+        elem_result.action,
+        DOMWorld.appendChildAction(doc_id, elem_id),
+        set_attr,
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    const elem_node = new_world.getNode(elem_id).?;
+    try testing.expect(elem_node.first_attribute != 0);
+
+    const attr_id = elem_node.first_attribute;
+    const attr_node = new_world.getNode(attr_id).?;
+    try testing.expect(attr_node.node_type == .attribute);
+    try testing.expectEqualStrings("class", new_world.getTagName(attr_id).?);
+    try testing.expectEqualStrings("container", new_world.getTextContent(attr_id).?);
+}
+
+test "remove child" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    const elem_result = try world.createElementAction("div");
+    const elem_id = elem_result.node_id;
+
+    const text_result = try world.createTextAction("Hello");
+    const text_id = text_result.node_id;
+
+    const actions = [_]Action{
+        doc_result.action,
+        elem_result.action,
+        text_result.action,
+        DOMWorld.appendChildAction(doc_id, elem_id),
+        DOMWorld.appendChildAction(elem_id, text_id),
+        DOMWorld.removeChildAction(elem_id, text_id),
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    const elem_node = new_world.getNode(elem_id).?;
+    try testing.expect(elem_node.first_child == 0);
+    try testing.expect(elem_node.last_child == 0);
+
+    const text_node = new_world.getNode(text_id).?;
+    try testing.expect(text_node.parent == 0);
+}
+
+test "nodelist and namednodemap" {
+    var world = try DOMWorld.init(testing.allocator);
+    defer world.deinit();
+
+    const doc_result = try world.createDocumentAction();
+    const doc_id = doc_result.node_id;
+
+    const elem_result = try world.createElementAction("div");
+    const elem_id = elem_result.node_id;
+
+    const text1_result = try world.createTextAction("Hello");
+    const text1_id = text1_result.node_id;
+
+    const text2_result = try world.createTextAction("World");
+    const text2_id = text2_result.node_id;
+
+    const set_attr1 = try world.setAttributeAction(elem_id, "class", "container");
+    const set_attr2 = try world.setAttributeAction(elem_id, "id", "main");
+
+    const actions = [_]Action{
+        doc_result.action,
+        elem_result.action,
+        text1_result.action,
+        text2_result.action,
+        DOMWorld.appendChildAction(doc_id, elem_id),
+        DOMWorld.appendChildAction(elem_id, text1_id),
+        DOMWorld.appendChildAction(elem_id, text2_id),
+        set_attr1,
+        set_attr2,
+    };
+
+    var new_world = try world.transform(&actions, testing.allocator);
+    defer new_world.deinit();
+
+    const elem_node_wrapper = Node{ .world = &new_world, .id = elem_id };
+    const child_nodes = elem_node_wrapper.childNodes();
+    try testing.expect(child_nodes.length() == 2);
+    try testing.expect(child_nodes.item(0).?.id == text1_id);
+    try testing.expect(child_nodes.item(1).?.id == text2_id);
+
+    const attr_map = NamedNodeMap{ .world = &new_world, .element_id = elem_id };
+    try testing.expect(attr_map.length() == 2);
+    const class_attr = attr_map.getNamedItem("class").?;
+    try testing.expectEqualStrings("container", new_world.getTextContent(class_attr.id).?);
+    const id_attr = attr_map.getNamedItem("id").?;
+    try testing.expectEqualStrings("main", new_world.getTextContent(id_attr.id).?);
+}
