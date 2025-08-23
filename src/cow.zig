@@ -127,7 +127,7 @@ const DOMWorld = struct {
     }
 
     // Create a new world by applying transformations (copy-on-write)
-    pub fn transform(self: *const Self, new_actions: []const Action, allocator: Allocator) !Self {
+    pub fn transform(self: *const Self, actions: []const Action, allocator: Allocator) !Self {
         var new_world = Self{
             .nodes = ArrayList(NodeData).init(allocator),
             .string_pool = StringPool.init(allocator),
@@ -156,7 +156,7 @@ const DOMWorld = struct {
         try new_world.actions.appendSlice(self.actions.items);
 
         // Apply new actions
-        for (new_actions) |action| {
+        for (actions) |action| {
             try new_world.applyAction(action);
         }
 
@@ -811,172 +811,135 @@ const NamedNodeMap = struct {
 };
 
 test "append doc with elem" {
-    var world = try DOMWorld.init(testing.allocator);
-    defer world.deinit();
+    var dom1 = try DOMWorld.init(testing.allocator);
+    defer dom1.deinit();
 
-    // Create actions in the original world (this sets up string pool)
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
+    const doc = try dom1.createDocumentAction();
+    const elem = try dom1.createElementAction("div");
 
-    const elem_result = try world.createElementAction("div");
-    const elem_id = elem_result.node_id;
-
-    // Apply transformations to create new world
-    const actions = [_]Action{ doc_result.action, elem_result.action, DOMWorld.appendChildAction(doc_id, elem_id) };
-
-    var new_world = try world.transform(&actions, testing.allocator);
-    defer new_world.deinit();
+    var dom2 = try dom1.transform(&[_]Action{
+        doc.action,
+        elem.action,
+        DOMWorld.appendChildAction(doc.node_id, elem.node_id)
+    }, testing.allocator);
+    defer dom2.deinit();
 
     // Verify structure
-    const doc_node = new_world.getNode(doc_id).?;
-    const elem_node = new_world.getNode(elem_id).?;
+    if (dom2.getNode(doc.node_id)) |n| {
+      try testing.expect(n.node_type == .document);
+      try testing.expect(n.first_child == elem.node_id);
+    }
 
-    try testing.expect(doc_node.node_type == .document);
-    try testing.expect(doc_node.first_child == elem_id);
-    try testing.expect(elem_node.node_type == .element);
-    try testing.expect(elem_node.parent == doc_id);
-    try testing.expectEqualStrings("div", new_world.getTagName(elem_id).?);
+    if (dom2.getNode(elem.node_id)) |n| {
+      try testing.expect(n.node_type == .element);
+      try testing.expect(n.parent == doc.node_id);
+      try testing.expectEqualStrings("div", dom2.getTagName(elem.node_id).?);
+    }
 }
 
 test "append doc with text" {
     var world = try DOMWorld.init(testing.allocator);
     defer world.deinit();
 
-    // Create document
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
+    const doc = try world.createDocumentAction();
+    const text = try world.createTextAction("Hello World");
 
-    // Create text node
-    const text_result = try world.createTextAction("Hello World");
-    const text_id = text_result.node_id;
-
-    // Apply transformations
-    const actions = [_]Action{ doc_result.action, text_result.action, DOMWorld.appendChildAction(doc_id, text_id) };
-
-    var new_world = try world.transform(&actions, testing.allocator);
+    var new_world = try world.transform(&[_]Action{
+        doc.action,
+        text.action,
+        DOMWorld.appendChildAction(doc.node_id, text.node_id)
+    }, testing.allocator);
     defer new_world.deinit();
 
-    // Verify structure
-    const doc_node = new_world.getNode(doc_id).?;
-    const text_node = new_world.getNode(text_id).?;
+    const doc_node = new_world.getNode(doc.node_id).?;
+    const text_node = new_world.getNode(text.node_id).?;
 
     try testing.expect(doc_node.node_type == .document);
-    try testing.expect(doc_node.first_child == text_id);
+    try testing.expect(doc_node.first_child == text.node_id);
     try testing.expect(text_node.node_type == .text);
-    try testing.expect(text_node.parent == doc_id);
-    try testing.expectEqualStrings("Hello World", new_world.getTextContent(text_id).?);
+    try testing.expect(text_node.parent == doc.node_id);
+    try testing.expectEqualStrings("Hello World", new_world.getTextContent(text.node_id).?);
 }
 
 test "prepend doc with text" {
     var world = try DOMWorld.init(testing.allocator);
     defer world.deinit();
 
-    // Create document
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
+    const doc = try world.createDocumentAction();
+    const elem = try world.createElementAction("div");
+    const text = try world.createTextAction("Hello");
 
-    // Create first element
-    const elem_result = try world.createElementAction("div");
-    const elem_id = elem_result.node_id;
-
-    // Create text node
-    const text_result = try world.createTextAction("Hello");
-    const text_id = text_result.node_id;
-
-    // Apply transformations: append element first, then prepend text
     const actions = [_]Action{
-        doc_result.action,
-        elem_result.action,
-        text_result.action,
-        DOMWorld.appendChildAction(doc_id, elem_id),
-        DOMWorld.prependChildAction(doc_id, text_id),
+        doc.action,
+        elem.action,
+        text.action,
+        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
+        DOMWorld.prependChildAction(doc.node_id, text.node_id),
     };
 
     var new_world = try world.transform(&actions, testing.allocator);
     defer new_world.deinit();
 
-    // Verify structure - text should be first, div should be second
-    const doc_node = new_world.getNode(doc_id).?;
-    try testing.expect(doc_node.first_child == text_id);
+    const doc_node = new_world.getNode(doc.node_id).?;
+    try testing.expect(doc_node.first_child == text.node_id);
 
-    const text_node = new_world.getNode(text_id).?;
-    try testing.expect(text_node.next_sibling == elem_id);
-    try testing.expectEqualStrings("Hello", new_world.getTextContent(text_id).?);
+    const text_node = new_world.getNode(text.node_id).?;
+    try testing.expect(text_node.next_sibling == elem.node_id);
+    try testing.expectEqualStrings("Hello", new_world.getTextContent(text.node_id).?);
 }
 
 test "append elem with elem" {
     var world = try DOMWorld.init(testing.allocator);
     defer world.deinit();
 
-    // Create document
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
+    const doc = try world.createDocumentAction();
+    const parent = try world.createElementAction("div");
+    const child = try world.createElementAction("span");
 
-    // Create parent element
-    const parent_result = try world.createElementAction("div");
-    const parent_id = parent_result.node_id;
-
-    // Create child element
-    const child_result = try world.createElementAction("span");
-    const child_id = child_result.node_id;
-
-    // Apply transformations
     const actions = [_]Action{
-        doc_result.action,
-        parent_result.action,
-        child_result.action,
-        DOMWorld.appendChildAction(doc_id, parent_id),
-        DOMWorld.appendChildAction(parent_id, child_id),
+        doc.action,
+        parent.action,
+        child.action,
+        DOMWorld.appendChildAction(doc.node_id, parent.node_id),
+        DOMWorld.appendChildAction(parent.node_id, child.node_id),
     };
 
     var new_world = try world.transform(&actions, testing.allocator);
     defer new_world.deinit();
 
     // Verify structure
-    const parent_node = new_world.getNode(parent_id).?;
-    const child_node = new_world.getNode(child_id).?;
+    const parent_node = new_world.getNode(parent.node_id).?;
+    const child_node = new_world.getNode(child.node_id).?;
 
-    try testing.expect(parent_node.first_child == child_id);
-    try testing.expect(child_node.parent == parent_id);
-    try testing.expectEqualStrings("div", new_world.getTagName(parent_id).?);
-    try testing.expectEqualStrings("span", new_world.getTagName(child_id).?);
+    try testing.expect(parent_node.first_child == child.node_id);
+    try testing.expect(child_node.parent == parent.node_id);
+    try testing.expectEqualStrings("div", new_world.getTagName(parent.node_id).?);
+    try testing.expectEqualStrings("span", new_world.getTagName(child.node_id).?);
 }
 
 test "append elem with text" {
     var world = try DOMWorld.init(testing.allocator);
     defer world.deinit();
 
-    // Create document
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
+    const doc = try world.createDocumentAction();
+    const elem = try world.createElementAction("p");
+    const text = try world.createTextAction("Content");
 
-    // Create element
-    const elem_result = try world.createElementAction("p");
-    const elem_id = elem_result.node_id;
-
-    // Create text node
-    const text_result = try world.createTextAction("Content");
-    const text_id = text_result.node_id;
-
-    // Apply transformations
-    const actions = [_]Action{
-        doc_result.action,
-        elem_result.action,
-        text_result.action,
-        DOMWorld.appendChildAction(doc_id, elem_id),
-        DOMWorld.appendChildAction(elem_id, text_id),
-    };
-
-    var new_world = try world.transform(&actions, testing.allocator);
+    var new_world = try world.transform(&[_]Action{
+        doc.action,
+        elem.action,
+        text.action,
+        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
+        DOMWorld.appendChildAction(elem.node_id, text.node_id),
+    }, testing.allocator);
     defer new_world.deinit();
 
-    // Verify structure
-    const elem_node = new_world.getNode(elem_id).?;
-    const text_node = new_world.getNode(text_id).?;
+    const elem_node = new_world.getNode(elem.node_id).?;
+    const text_node = new_world.getNode(text.node_id).?;
 
-    try testing.expect(elem_node.first_child == text_id);
-    try testing.expect(text_node.parent == elem_id);
-    try testing.expectEqualStrings("Content", new_world.getTextContent(text_id).?);
+    try testing.expect(elem_node.first_child == text.node_id);
+    try testing.expect(text_node.parent == elem.node_id);
+    try testing.expectEqualStrings("Content", new_world.getTextContent(text.node_id).?);
 }
 
 test "prepend elem with elem" {
@@ -987,7 +950,8 @@ test "prepend elem with elem" {
     const parent = try world.createElementAction("ul");
     const child1 = try world.createElementAction("li");
     const child2 = try world.createElementAction("li");
-    const actions = [_]Action{
+
+    var new_world = try world.transform(&[_]Action{
         doc.action,
         parent.action,
         child1.action,
@@ -995,9 +959,7 @@ test "prepend elem with elem" {
         DOMWorld.appendChildAction(doc.node_id, parent.node_id),
         DOMWorld.appendChildAction(parent.node_id, child1.node_id),
         DOMWorld.prependChildAction(parent.node_id, child2.node_id),
-    };
-
-    var new_world = try world.transform(&actions, testing.allocator);
+    }, testing.allocator);
     defer new_world.deinit();
 
     const parent_node = new_world.getNode(parent.node_id).?;
@@ -1012,69 +974,48 @@ test "prepend elem with text" {
     var world = try DOMWorld.init(testing.allocator);
     defer world.deinit();
 
-    // Create document
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
+    const doc = try world.createDocumentAction();
+    const elem = try world.createElementAction("h1");
+    const text1 = try world.createTextAction("World");
+    const text2 = try world.createTextAction("Hello ");
 
-    // Create element
-    const elem_result = try world.createElementAction("h1");
-    const elem_id = elem_result.node_id;
-
-    // Create first text node
-    const text1_result = try world.createTextAction("World");
-    const text1_id = text1_result.node_id;
-
-    // Create second text node
-    const text2_result = try world.createTextAction("Hello ");
-    const text2_id = text2_result.node_id;
-
-    // Apply transformations: append first text, then prepend second text
-    const actions = [_]Action{
-        doc_result.action,
-        elem_result.action,
-        text1_result.action,
-        text2_result.action,
-        DOMWorld.appendChildAction(doc_id, elem_id),
-        DOMWorld.appendChildAction(elem_id, text1_id),
-        DOMWorld.prependChildAction(elem_id, text2_id),
-    };
-
-    var new_world = try world.transform(&actions, testing.allocator);
+    var new_world = try world.transform(&[_]Action{
+        doc.action,
+        elem.action,
+        text1.action,
+        text2.action,
+        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
+        DOMWorld.appendChildAction(elem.node_id, text1.node_id),
+        DOMWorld.prependChildAction(elem.node_id, text2.node_id),
+    }, testing.allocator);
     defer new_world.deinit();
 
-    // Verify structure - "Hello " should be first, "World" should be second
-    const elem_node = new_world.getNode(elem_id).?;
-    try testing.expect(elem_node.first_child == text2_id);
+    const elem_node = new_world.getNode(elem.node_id).?;
+    try testing.expect(elem_node.first_child == text2.node_id);
 
-    const text2_node = new_world.getNode(text2_id).?;
-    try testing.expect(text2_node.next_sibling == text1_id);
-    try testing.expectEqualStrings("Hello ", new_world.getTextContent(text2_id).?);
-    try testing.expectEqualStrings("World", new_world.getTextContent(text1_id).?);
+    const text2_node = new_world.getNode(text2.node_id).?;
+    try testing.expect(text2_node.next_sibling == text1.node_id);
+    try testing.expectEqualStrings("Hello ", new_world.getTextContent(text2.node_id).?);
+    try testing.expectEqualStrings("World", new_world.getTextContent(text1.node_id).?);
 }
 
 test "set attribute on element" {
     var world = try DOMWorld.init(testing.allocator);
     defer world.deinit();
 
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
+    const doc = try world.createDocumentAction();
+    const elem = try world.createElementAction("div");
+    const set_attr = try world.setAttributeAction(elem.node_id, "class", "container");
 
-    const elem_result = try world.createElementAction("div");
-    const elem_id = elem_result.node_id;
-
-    const set_attr = try world.setAttributeAction(elem_id, "class", "container");
-
-    const actions = [_]Action{
-        doc_result.action,
-        elem_result.action,
-        DOMWorld.appendChildAction(doc_id, elem_id),
+    var new_world = try world.transform(&[_]Action{
+        doc.action,
+        elem.action,
+        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
         set_attr,
-    };
-
-    var new_world = try world.transform(&actions, testing.allocator);
+    }, testing.allocator);
     defer new_world.deinit();
 
-    const elem_node = new_world.getNode(elem_id).?;
+    const elem_node = new_world.getNode(elem.node_id).?;
     try testing.expect(elem_node.first_attribute != 0);
 
     const attr_id = elem_node.first_attribute;
@@ -1088,32 +1029,27 @@ test "remove child" {
     var world = try DOMWorld.init(testing.allocator);
     defer world.deinit();
 
-    const doc_result = try world.createDocumentAction();
-    const doc_id = doc_result.node_id;
-
-    const elem_result = try world.createElementAction("div");
-    const elem_id = elem_result.node_id;
-
-    const text_result = try world.createTextAction("Hello");
-    const text_id = text_result.node_id;
+    const doc = try world.createDocumentAction();
+    const elem = try world.createElementAction("div");
+    const text = try world.createTextAction("Hello");
 
     const actions = [_]Action{
-        doc_result.action,
-        elem_result.action,
-        text_result.action,
-        DOMWorld.appendChildAction(doc_id, elem_id),
-        DOMWorld.appendChildAction(elem_id, text_id),
-        DOMWorld.removeChildAction(elem_id, text_id),
+        doc.action,
+        elem.action,
+        text.action,
+        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
+        DOMWorld.appendChildAction(elem.node_id, text.node_id),
+        DOMWorld.removeChildAction(elem.node_id, text.node_id),
     };
 
     var new_world = try world.transform(&actions, testing.allocator);
     defer new_world.deinit();
 
-    const elem_node = new_world.getNode(elem_id).?;
+    const elem_node = new_world.getNode(elem.node_id).?;
     try testing.expect(elem_node.first_child == 0);
     try testing.expect(elem_node.last_child == 0);
 
-    const text_node = new_world.getNode(text_id).?;
+    const text_node = new_world.getNode(text.node_id).?;
     try testing.expect(text_node.parent == 0);
 }
 
