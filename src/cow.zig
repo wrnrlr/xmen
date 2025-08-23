@@ -884,15 +884,19 @@ pub fn removeAttributeAction(builder: *Builder, element_id: u32, name: []const u
 
 // Node wrapper
 const Node = struct {
-    world: *const DOM,
+    dom: *const DOM,
     id: u32,
 
+    inline fn node(self: Node) ?NodeData {
+      return self.dom.nodes.items[self.id - 1];
+    }
+
     pub fn nodeType(self: Node) NodeType {
-        return std.meta.activeTag(self.world.nodes.items[self.id - 1]);
+        return std.meta.activeTag(self.node());
     }
 
     pub fn parentNode(self: Node) ?Node {
-        const parent_id = switch (self.world.nodes.items[self.id - 1]) {
+        const parent_id = switch (self.node()) {
             .document => 0,
             .element => |e| e.parent,
             .attribute => |a| a.parent,
@@ -902,31 +906,31 @@ const Node = struct {
             .comment => |co| co.parent,
         };
         if (parent_id == 0) return null;
-        return Node{ .world = self.world, .id = parent_id };
+        return Node{ .dom = self.dom, .id = parent_id };
     }
 
     pub fn firstChild(self: Node) ?Node {
-        const child_id = switch (self.world.nodes.items[self.id - 1]) {
+        const child_id = switch (self.node()) {
             .document => |d| d.first_child,
             .element => |e| e.first_child,
             else => 0,
         };
         if (child_id == 0) return null;
-        return Node{ .world = self.world, .id = child_id };
+        return Node{ .dom = self.dom, .id = child_id };
     }
 
     pub fn lastChild(self: Node) ?Node {
-        const child_id = switch (self.world.nodes.items[self.id - 1]) {
+        const child_id = switch (self.node()) {
             .document => |d| d.last_child,
             .element => |e| e.last_child,
             else => 0,
         };
         if (child_id == 0) return null;
-        return Node{ .world = self.world, .id = child_id };
+        return Node{ .dom = self.dom, .id = child_id };
     }
 
     pub fn nextSibling(self: Node) ?Node {
-        const sibling_id = switch (self.world.nodes.items[self.id - 1]) {
+        const sibling_id = switch (self.node()) {
             .document => 0,
             .element => |e| e.next,
             .attribute => |a| a.next,
@@ -936,11 +940,11 @@ const Node = struct {
             .comment => |co| co.next,
         };
         if (sibling_id == 0) return null;
-        return Node{ .world = self.world, .id = sibling_id };
+        return Node{ .dom = self.dom, .id = sibling_id };
     }
 
     pub fn childNodes(self: Node) NodeList {
-        return NodeList{ .world = self.world, .parent_id = self.id };
+        return NodeList{ .world = self.dom, .parent_id = self.id };
     }
 };
 
@@ -979,7 +983,7 @@ const NodeList = struct {
         var i: u32 = 0;
         while (current != 0) {
             if (i == index) {
-                return Node{ .world = self.world, .id = current };
+                return Node{ .dom = self.world, .id = current };
             }
             i += 1;
             current = switch (self.world.nodes.items[current - 1]) {
@@ -1024,7 +1028,7 @@ const NamedNodeMap = struct {
         var i: u32 = 0;
         while (current != 0) {
             if (i == index) {
-                return Node{ .world = self.world, .id = current };
+                return Node{ .dom = self.world, .id = current };
             }
             i += 1;
             current = switch (self.world.nodes.items[current - 1]) {
@@ -1048,7 +1052,7 @@ const NamedNodeMap = struct {
             };
             const attr_name = self.world.strings.getString(attr_name_id);
             if (std.mem.eql(u8, attr_name, name)) {
-                return Node{ .world = self.world, .id = current };
+                return Node{ .dom = self.world, .id = current };
             }
             current = switch (self.world.nodes.items[attr_idx]) {
                 .attribute => |a| a.next,
@@ -1353,7 +1357,7 @@ test "nodelist" {
     }, testing.allocator);
     defer dom2.deinit();
 
-    const elem_node_wrapper = Node{ .world = &dom2, .id = elem.node_id };
+    const elem_node_wrapper = Node{ .dom = &dom2, .id = elem.node_id };
     const nodes = elem_node_wrapper.childNodes();
     try testing.expect(nodes.length() == 2);
     try testing.expect(nodes.item(0).?.id == text1.node_id);
