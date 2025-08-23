@@ -93,10 +93,10 @@ const Action = struct {
 };
 
 // Main DOM World - copy-on-write container
-const DOMWorld = struct {
+const DOM = struct {
     // Core data
     nodes: ArrayList(NodeData),
-    string_pool: StringPool,
+    strings: StringPool,
 
     // Transformation tracking
     version: u32,
@@ -105,32 +105,30 @@ const DOMWorld = struct {
     // Node allocation
     next_node_id: u32,
 
-    const Self = @This();
-
-    pub fn init(allocator: Allocator) !Self {
-        var res = Self{
+    pub fn init(allocator: Allocator) !DOM {
+        var res = DOM{
             .nodes = ArrayList(NodeData).init(allocator),
-            .string_pool = StringPool.init(allocator),
+            .strings = StringPool.init(allocator),
             .version = 0,
             .actions = ArrayList(Action).init(allocator),
             .next_node_id = 1, // 0 is reserved for "null" references
         };
         const empty = try allocator.dupe(u8, "");
-        try res.string_pool.strings.append(empty);
+        try res.strings.strings.append(empty);
         return res;
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *DOM) void {
         self.nodes.deinit();
-        self.string_pool.deinit();
+        self.strings.deinit();
         self.actions.deinit();
     }
 
     // Create a new world by applying transformations (copy-on-write)
-    pub fn transform(self: *const Self, actions: []const Action, allocator: Allocator) !Self {
-        var new_world = Self{
+    pub fn transform(self: *const DOM, actions: []const Action, allocator: Allocator) !DOM {
+        var new_world = DOM{
             .nodes = ArrayList(NodeData).init(allocator),
-            .string_pool = StringPool.init(allocator),
+            .strings = StringPool.init(allocator),
             .version = self.version + 1,
             .actions = ArrayList(Action).init(allocator),
             .next_node_id = self.next_node_id,
@@ -140,16 +138,16 @@ const DOMWorld = struct {
         try new_world.nodes.appendSlice(self.nodes.items);
 
         // Share string pool more efficiently - copy the data structures
-        for (self.string_pool.strings.items) |str| {
+        for (self.strings.strings.items) |str| {
             const owned_copy = try allocator.dupe(u8, str);
-            try new_world.string_pool.strings.append(owned_copy);
+            try new_world.strings.strings.append(owned_copy);
         }
 
         // Copy the hash map entries using the new string references
-        var iterator = self.string_pool.map.iterator();
+        var iterator = self.strings.map.iterator();
         while (iterator.next()) |entry| {
-            const new_str = new_world.string_pool.strings.items[entry.value_ptr.*];
-            try new_world.string_pool.map.put(new_str, entry.value_ptr.*);
+            const new_str = new_world.strings.strings.items[entry.value_ptr.*];
+            try new_world.strings.map.put(new_str, entry.value_ptr.*);
         }
 
         // Copy existing actions
@@ -163,7 +161,7 @@ const DOMWorld = struct {
         return new_world;
     }
 
-    fn applyAction(self: *Self, action: Action) !void {
+    fn applyAction(self: *DOM, action: Action) !void {
         switch (action.action_type) {
             .CreateDocument => {
                 const node_data = NodeData{
@@ -283,7 +281,7 @@ const DOMWorld = struct {
         try self.actions.append(action);
     }
 
-    fn createNodeAt(self: *Self, node_id: u32, node_data: NodeData) !void {
+    fn createNodeAt(self: *DOM, node_id: u32, node_data: NodeData) !void {
         // Ensure array is large enough to hold node at node_id index (1-based)
         const dummy = NodeData{
             .node_type = .document,
@@ -302,7 +300,7 @@ const DOMWorld = struct {
         self.nodes.items[node_id - 1] = node_data;
     }
 
-    fn appendChildInternal(self: *Self, parent_id: u32, child_id: u32) !void {
+    fn appendChildInternal(self: *DOM, parent_id: u32, child_id: u32) !void {
         if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len) {
             return error.InvalidNodeIndex;
         }
@@ -323,7 +321,7 @@ const DOMWorld = struct {
         }
     }
 
-    fn prependChildInternal(self: *Self, parent_id: u32, child_id: u32) !void {
+    fn prependChildInternal(self: *DOM, parent_id: u32, child_id: u32) !void {
         if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len) {
             return error.InvalidNodeIndex;
         }
@@ -342,7 +340,7 @@ const DOMWorld = struct {
         }
     }
 
-    fn removeChildInternal(self: *Self, parent_id: u32, child_id: u32) !void {
+    fn removeChildInternal(self: *DOM, parent_id: u32, child_id: u32) !void {
         if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len) {
             return error.InvalidNodeIndex;
         }
@@ -378,7 +376,7 @@ const DOMWorld = struct {
         return error.ChildNotFound;
     }
 
-    fn setAttributeInternal(self: *Self, element_id: u32, attr_name_id: u32, attr_value_id: u32) !void {
+    fn setAttributeInternal(self: *DOM, element_id: u32, attr_name_id: u32, attr_value_id: u32) !void {
         if (element_id == 0 or element_id > self.nodes.items.len) {
             return error.InvalidNodeIndex;
         }
@@ -441,7 +439,7 @@ const DOMWorld = struct {
         }
     }
 
-    fn removeAttributeInternal(self: *Self, element_id: u32, attr_name_id: u32) !void {
+    fn removeAttributeInternal(self: *DOM, element_id: u32, attr_name_id: u32) !void {
         if (element_id == 0 or element_id > self.nodes.items.len) {
             return error.InvalidNodeIndex;
         }
@@ -477,7 +475,7 @@ const DOMWorld = struct {
     }
 
     // Helper functions for creating actions
-    pub fn createDocumentAction(self: *Self) !struct { action: Action, node_id: u32 } {
+    pub fn createDocumentAction(self: *DOM) !struct { action: Action, node_id: u32 } {
         const node_id = self.next_node_id;
         self.next_node_id += 1;
 
@@ -495,8 +493,8 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn createElementAction(self: *Self, tag_name: []const u8) !struct { action: Action, node_id: u32 } {
-        const tag_id = try self.string_pool.intern(tag_name);
+    pub fn createElementAction(self: *DOM, tag_name: []const u8) !struct { action: Action, node_id: u32 } {
+        const tag_id = try self.strings.intern(tag_name);
         const node_id = self.next_node_id;
         self.next_node_id += 1;
 
@@ -514,9 +512,9 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn createAttributeAction(self: *Self, name: []const u8, value: []const u8) !struct { action: Action, node_id: u32 } {
-        const name_id = try self.string_pool.intern(name);
-        const value_id = try self.string_pool.intern(value);
+    pub fn createAttributeAction(self: *DOM, name: []const u8, value: []const u8) !struct { action: Action, node_id: u32 } {
+        const name_id = try self.strings.intern(name);
+        const value_id = try self.strings.intern(value);
         const node_id = self.next_node_id;
         self.next_node_id += 1;
 
@@ -534,8 +532,8 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn createTextAction(self: *Self, text: []const u8) !struct { action: Action, node_id: u32 } {
-        const text_id = try self.string_pool.intern(text);
+    pub fn createTextAction(self: *DOM, text: []const u8) !struct { action: Action, node_id: u32 } {
+        const text_id = try self.strings.intern(text);
         const node_id = self.next_node_id;
         self.next_node_id += 1;
 
@@ -553,8 +551,8 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn createCDATASectionAction(self: *Self, data: []const u8) !struct { action: Action, node_id: u32 } {
-        const data_id = try self.string_pool.intern(data);
+    pub fn createCDATASectionAction(self: *DOM, data: []const u8) !struct { action: Action, node_id: u32 } {
+        const data_id = try self.strings.intern(data);
         const node_id = self.next_node_id;
         self.next_node_id += 1;
 
@@ -572,9 +570,9 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn createProcessingInstructionAction(self: *Self, target: []const u8, data: []const u8) !struct { action: Action, node_id: u32 } {
-        const target_id = try self.string_pool.intern(target);
-        const data_id = try self.string_pool.intern(data);
+    pub fn createProcessingInstructionAction(self: *DOM, target: []const u8, data: []const u8) !struct { action: Action, node_id: u32 } {
+        const target_id = try self.strings.intern(target);
+        const data_id = try self.strings.intern(data);
         const node_id = self.next_node_id;
         self.next_node_id += 1;
 
@@ -592,8 +590,8 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn createCommentAction(self: *Self, data: []const u8) !struct { action: Action, node_id: u32 } {
-        const data_id = try self.string_pool.intern(data);
+    pub fn createCommentAction(self: *DOM, data: []const u8) !struct { action: Action, node_id: u32 } {
+        const data_id = try self.strings.intern(data);
         const node_id = self.next_node_id;
         self.next_node_id += 1;
 
@@ -647,9 +645,9 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn setAttributeAction(self: *Self, element_id: u32, name: []const u8, value: []const u8) !Action {
-        const name_id = try self.string_pool.intern(name);
-        const value_id = try self.string_pool.intern(value);
+    pub fn setAttributeAction(self: *DOM, element_id: u32, name: []const u8, value: []const u8) !Action {
+        const name_id = try self.strings.intern(name);
+        const value_id = try self.strings.intern(value);
 
         return Action{
             .action_type = .SetAttribute,
@@ -662,8 +660,8 @@ const DOMWorld = struct {
         };
     }
 
-    pub fn removeAttributeAction(self: *Self, element_id: u32, name: []const u8) !Action {
-        const name_id = try self.string_pool.intern(name);
+    pub fn removeAttributeAction(self: *DOM, element_id: u32, name: []const u8) !Action {
+        const name_id = try self.strings.intern(name);
 
         return Action{
             .action_type = .RemoveAttribute,
@@ -677,24 +675,24 @@ const DOMWorld = struct {
     }
 
     // Query helpers
-    pub fn getNode(self: *const Self, node_id: u32) ?*const NodeData {
+    pub fn getNode(self: *const DOM, node_id: u32) ?*const NodeData {
         if (node_id == 0 or node_id > self.nodes.items.len) return null;
         return &self.nodes.items[node_id - 1]; // node_id is 1-based
     }
 
-    pub fn getTagName(self: *const Self, node_id: u32) ?[]const u8 {
+    pub fn getTagName(self: *const DOM, node_id: u32) ?[]const u8 {
         if (self.getNode(node_id)) |node| {
             if (node.tag_name != 0) {
-                return self.string_pool.getString(node.tag_name);
+                return self.strings.getString(node.tag_name);
             }
         }
         return null;
     }
 
-    pub fn getTextContent(self: *const Self, node_id: u32) ?[]const u8 {
+    pub fn getTextContent(self: *const DOM, node_id: u32) ?[]const u8 {
         if (self.getNode(node_id)) |node| {
             if (node.text_content != 0) {
-                return self.string_pool.getString(node.text_content);
+                return self.strings.getString(node.text_content);
             }
         }
         return null;
@@ -703,7 +701,7 @@ const DOMWorld = struct {
 
 // Node wrapper
 const Node = struct {
-    world: *const DOMWorld,
+    world: *const DOM,
     id: u32,
 
     pub fn nodeType(self: Node) NodeType {
@@ -741,7 +739,7 @@ const Node = struct {
 
 // NodeList implementation
 const NodeList = struct {
-    world: *const DOMWorld,
+    world: *const DOM,
     parent_id: u32,
 
     pub fn length(self: NodeList) u32 {
@@ -770,7 +768,7 @@ const NodeList = struct {
 
 // NamedNodeMap implementation
 const NamedNodeMap = struct {
-    world: *const DOMWorld,
+    world: *const DOM,
     element_id: u32,
 
     pub fn length(self: NamedNodeMap) u32 {
@@ -800,7 +798,7 @@ const NamedNodeMap = struct {
         var current = self.world.nodes.items[self.element_id - 1].first_attribute;
         while (current != 0) {
             const attr_idx = current - 1;
-            const attr_name = self.world.string_pool.getString(self.world.nodes.items[attr_idx].tag_name);
+            const attr_name = self.world.strings.getString(self.world.nodes.items[attr_idx].tag_name);
             if (std.mem.eql(u8, attr_name, name)) {
                 return Node{ .world = self.world, .id = current };
             }
@@ -811,7 +809,7 @@ const NamedNodeMap = struct {
 };
 
 test "append doc with elem" {
-    var dom1 = try DOMWorld.init(testing.allocator);
+    var dom1 = try DOM.init(testing.allocator);
     defer dom1.deinit();
 
     const doc = try dom1.createDocumentAction();
@@ -820,7 +818,7 @@ test "append doc with elem" {
     var dom2 = try dom1.transform(&[_]Action{
         doc.action,
         elem.action,
-        DOMWorld.appendChildAction(doc.node_id, elem.node_id)
+        DOM.appendChildAction(doc.node_id, elem.node_id)
     }, testing.allocator);
     defer dom2.deinit();
 
@@ -838,7 +836,7 @@ test "append doc with elem" {
 }
 
 test "append doc with text" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -847,7 +845,7 @@ test "append doc with text" {
     var new_world = try world.transform(&[_]Action{
         doc.action,
         text.action,
-        DOMWorld.appendChildAction(doc.node_id, text.node_id)
+        DOM.appendChildAction(doc.node_id, text.node_id)
     }, testing.allocator);
     defer new_world.deinit();
 
@@ -862,7 +860,7 @@ test "append doc with text" {
 }
 
 test "prepend doc with text" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -873,8 +871,8 @@ test "prepend doc with text" {
         doc.action,
         elem.action,
         text.action,
-        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
-        DOMWorld.prependChildAction(doc.node_id, text.node_id),
+        DOM.appendChildAction(doc.node_id, elem.node_id),
+        DOM.prependChildAction(doc.node_id, text.node_id),
     };
 
     var new_world = try world.transform(&actions, testing.allocator);
@@ -889,7 +887,7 @@ test "prepend doc with text" {
 }
 
 test "append elem with elem" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -900,8 +898,8 @@ test "append elem with elem" {
         doc.action,
         parent.action,
         child.action,
-        DOMWorld.appendChildAction(doc.node_id, parent.node_id),
-        DOMWorld.appendChildAction(parent.node_id, child.node_id),
+        DOM.appendChildAction(doc.node_id, parent.node_id),
+        DOM.appendChildAction(parent.node_id, child.node_id),
     };
 
     var new_world = try world.transform(&actions, testing.allocator);
@@ -918,7 +916,7 @@ test "append elem with elem" {
 }
 
 test "append elem with text" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -929,8 +927,8 @@ test "append elem with text" {
         doc.action,
         elem.action,
         text.action,
-        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
-        DOMWorld.appendChildAction(elem.node_id, text.node_id),
+        DOM.appendChildAction(doc.node_id, elem.node_id),
+        DOM.appendChildAction(elem.node_id, text.node_id),
     }, testing.allocator);
     defer new_world.deinit();
 
@@ -943,7 +941,7 @@ test "append elem with text" {
 }
 
 test "prepend elem with elem" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -956,9 +954,9 @@ test "prepend elem with elem" {
         parent.action,
         child1.action,
         child2.action,
-        DOMWorld.appendChildAction(doc.node_id, parent.node_id),
-        DOMWorld.appendChildAction(parent.node_id, child1.node_id),
-        DOMWorld.prependChildAction(parent.node_id, child2.node_id),
+        DOM.appendChildAction(doc.node_id, parent.node_id),
+        DOM.appendChildAction(parent.node_id, child1.node_id),
+        DOM.prependChildAction(parent.node_id, child2.node_id),
     }, testing.allocator);
     defer new_world.deinit();
 
@@ -971,7 +969,7 @@ test "prepend elem with elem" {
 }
 
 test "prepend elem with text" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -984,9 +982,9 @@ test "prepend elem with text" {
         elem.action,
         text1.action,
         text2.action,
-        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
-        DOMWorld.appendChildAction(elem.node_id, text1.node_id),
-        DOMWorld.prependChildAction(elem.node_id, text2.node_id),
+        DOM.appendChildAction(doc.node_id, elem.node_id),
+        DOM.appendChildAction(elem.node_id, text1.node_id),
+        DOM.prependChildAction(elem.node_id, text2.node_id),
     }, testing.allocator);
     defer new_world.deinit();
 
@@ -1000,7 +998,7 @@ test "prepend elem with text" {
 }
 
 test "set attribute on element" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -1010,7 +1008,7 @@ test "set attribute on element" {
     var new_world = try world.transform(&[_]Action{
         doc.action,
         elem.action,
-        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
+        DOM.appendChildAction(doc.node_id, elem.node_id),
         set_attr,
     }, testing.allocator);
     defer new_world.deinit();
@@ -1026,7 +1024,7 @@ test "set attribute on element" {
 }
 
 test "remove child" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -1037,9 +1035,9 @@ test "remove child" {
         doc.action,
         elem.action,
         text.action,
-        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
-        DOMWorld.appendChildAction(elem.node_id, text.node_id),
-        DOMWorld.removeChildAction(elem.node_id, text.node_id),
+        DOM.appendChildAction(doc.node_id, elem.node_id),
+        DOM.appendChildAction(elem.node_id, text.node_id),
+        DOM.removeChildAction(elem.node_id, text.node_id),
     };
 
     var new_world = try world.transform(&actions, testing.allocator);
@@ -1054,7 +1052,7 @@ test "remove child" {
 }
 
 test "nodelist" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
@@ -1067,9 +1065,9 @@ test "nodelist" {
         elem.action,
         text1.action,
         text2.action,
-        DOMWorld.appendChildAction(doc.node_id, elem.node_id),
-        DOMWorld.appendChildAction(elem.node_id, text1.node_id),
-        DOMWorld.appendChildAction(elem.node_id, text2.node_id)
+        DOM.appendChildAction(doc.node_id, elem.node_id),
+        DOM.appendChildAction(elem.node_id, text1.node_id),
+        DOM.appendChildAction(elem.node_id, text2.node_id)
     }, testing.allocator);
     defer new_world.deinit();
 
@@ -1081,7 +1079,7 @@ test "nodelist" {
 }
 
 test "namednodemap" {
-    var world = try DOMWorld.init(testing.allocator);
+    var world = try DOM.init(testing.allocator);
     defer world.deinit();
 
     const doc = try world.createDocumentAction();
