@@ -18,18 +18,15 @@ const StringPool = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.strings.items) |str| {
+        for (self.strings.items) |str|
             self.strings.allocator.free(str);
-        }
         self.strings.deinit();
         self.map.deinit();
     }
 
     pub fn intern(self: *Self, str: []const u8) !u32 {
-        if (self.map.get(str)) |id| {
+        if (self.map.get(str)) |id|
             return id;
-        }
-
         const owned_str = try self.strings.allocator.dupe(u8, str);
         const id: u32 = @intCast(self.strings.items.len);
         try self.strings.append(owned_str);
@@ -54,7 +51,7 @@ const NodeType = enum(u8) {
 };
 
 const TextData = struct {
-    text_content: u32,
+    content: u32,
     parent: u32 = 0,
     next: u32 = 0,
 };
@@ -67,8 +64,8 @@ const NodeData = union(NodeType) {
         first_child: u32 = 0,
         last_child: u32 = 0,
         next: u32 = 0,
-        first_attribute: u32 = 0,
-        last_attribute: u32 = 0,
+        first_attr: u32 = 0,
+        last_attr: u32 = 0,
     },
     attribute: struct {
         name: u32,
@@ -107,7 +104,7 @@ const Action = struct {
     target_node: u32, // node index
     new_node: u32, // for append/prepend/remove child operations
     tag_name: u32, // for create element/attribute/proc_inst
-    text_content: u32, // for create text/cdata/comment/attribute/proc_inst
+    content: u32, // for create text/cdata/comment/attribute/proc_inst
     attr_name: u32, // for attribute operations
     attr_value: u32, // for set attribute
 };
@@ -133,6 +130,206 @@ const Builder = struct {
         self.strings.deinit();
     }
 };
+
+// Helper functions for creating actions using Builder
+pub fn createDocumentAction(builder: *Builder) !struct { action: Action, node_id: u32 } {
+    const node_id = builder.next_node_id;
+    builder.next_node_id += 1;
+
+    return .{
+        .action = Action{
+            .action_type = .CreateDocument,
+            .target_node = node_id,
+            .new_node = 0,
+            .tag_name = 0,
+            .content = 0,
+            .attr_name = 0,
+            .attr_value = 0,
+        },
+        .node_id = node_id,
+    };
+}
+
+pub fn createElementAction(builder: *Builder, tag_name: []const u8) !struct { action: Action, node_id: u32 } {
+    const tag_id = try builder.strings.intern(tag_name);
+    const node_id = builder.next_node_id;
+    builder.next_node_id += 1;
+
+    return .{
+        .action = Action{
+            .action_type = .CreateElement,
+            .target_node = node_id,
+            .new_node = 0,
+            .tag_name = tag_id,
+            .content = 0,
+            .attr_name = 0,
+            .attr_value = 0,
+        },
+        .node_id = node_id,
+    };
+}
+
+pub fn createAttributeAction(builder: *Builder, name: []const u8, value: []const u8) !struct { action: Action, node_id: u32 } {
+    const name_id = try builder.strings.intern(name);
+    const value_id = try builder.strings.intern(value);
+    const node_id = builder.next_node_id;
+    builder.next_node_id += 1;
+
+    return .{
+        .action = Action{
+            .action_type = .CreateAttribute,
+            .target_node = node_id,
+            .new_node = 0,
+            .tag_name = name_id,
+            .content = value_id,
+            .attr_name = 0,
+            .attr_value = 0,
+        },
+        .node_id = node_id,
+    };
+}
+
+pub fn createTextAction(builder: *Builder, text: []const u8) !struct { action: Action, node_id: u32 } {
+    const text_id = try builder.strings.intern(text);
+    const node_id = builder.next_node_id;
+    builder.next_node_id += 1;
+
+    return .{
+        .action = Action{
+            .action_type = .CreateText,
+            .target_node = node_id,
+            .new_node = 0,
+            .tag_name = 0,
+            .content = text_id,
+            .attr_name = 0,
+            .attr_value = 0,
+        },
+        .node_id = node_id,
+    };
+}
+
+pub fn createCDATASectionAction(builder: *Builder, data: []const u8) !struct { action: Action, node_id: u32 } {
+    const data_id = try builder.strings.intern(data);
+    const node_id = builder.next_node_id;
+    builder.next_node_id += 1;
+
+    return .{
+        .action = Action{
+            .action_type = .CreateCDATA,
+            .target_node = node_id,
+            .new_node = 0,
+            .tag_name = 0,
+            .content = data_id,
+            .attr_name = 0,
+            .attr_value = 0,
+        },
+        .node_id = node_id,
+    };
+}
+
+pub fn createProcessingInstructionAction(builder: *Builder, target: []const u8, data: []const u8) !struct { action: Action, node_id: u32 } {
+    const target_id = try builder.strings.intern(target);
+    const data_id = try builder.strings.intern(data);
+    const node_id = builder.next_node_id;
+    builder.next_node_id += 1;
+
+    return .{
+        .action = Action{
+            .action_type = .CreateProcessingInstruction,
+            .target_node = node_id,
+            .new_node = 0,
+            .tag_name = target_id,
+            .content = data_id,
+            .attr_name = 0,
+            .attr_value = 0,
+        },
+        .node_id = node_id,
+    };
+}
+
+pub fn createCommentAction(builder: *Builder, data: []const u8) !struct { action: Action, node_id: u32 } {
+    const data_id = try builder.strings.intern(data);
+    const node_id = builder.next_node_id;
+    builder.next_node_id += 1;
+
+    return .{
+        .action = Action{
+            .action_type = .CreateComment,
+            .target_node = node_id,
+            .new_node = 0,
+            .tag_name = 0,
+            .content = data_id,
+            .attr_name = 0,
+            .attr_value = 0,
+        },
+        .node_id = node_id,
+    };
+}
+
+pub fn appendChildAction(parent_id: u32, child_id: u32) Action {
+    return Action{
+        .action_type = .AppendChild,
+        .target_node = parent_id,
+        .new_node = child_id,
+        .tag_name = 0,
+        .content = 0,
+        .attr_name = 0,
+        .attr_value = 0,
+    };
+}
+
+pub fn prependChildAction(parent_id: u32, child_id: u32) Action {
+    return Action{
+        .action_type = .PrependChild,
+        .target_node = parent_id,
+        .new_node = child_id,
+        .tag_name = 0,
+        .content = 0,
+        .attr_name = 0,
+        .attr_value = 0,
+    };
+}
+
+pub fn removeChildAction(parent_id: u32, child_id: u32) Action {
+    return Action{
+        .action_type = .RemoveChild,
+        .target_node = parent_id,
+        .new_node = child_id,
+        .tag_name = 0,
+        .content = 0,
+        .attr_name = 0,
+        .attr_value = 0,
+    };
+}
+
+pub fn setAttributeAction(builder: *Builder, element_id: u32, name: []const u8, value: []const u8) !Action {
+    const name_id = try builder.strings.intern(name);
+    const value_id = try builder.strings.intern(value);
+
+    return Action{
+        .action_type = .SetAttribute,
+        .target_node = element_id,
+        .new_node = 0,
+        .tag_name = 0,
+        .content = 0,
+        .attr_name = name_id,
+        .attr_value = value_id,
+    };
+}
+
+pub fn removeAttributeAction(builder: *Builder, element_id: u32, name: []const u8) !Action {
+    const name_id = try builder.strings.intern(name);
+
+    return Action{
+        .action_type = .RemoveAttribute,
+        .target_node = element_id,
+        .new_node = 0,
+        .tag_name = 0,
+        .content = 0,
+        .attr_name = name_id,
+        .attr_value = 0,
+    };
+}
 
 // Main DOM World - copy-on-write container
 const DOM = struct {
@@ -229,23 +426,23 @@ const DOM = struct {
                 try self.createNodeAt(action.target_node, node_data);
             },
             .CreateAttribute => {
-                const node_data = NodeData{ .attribute = .{ .name = action.tag_name, .value = action.text_content } };
+                const node_data = NodeData{ .attribute = .{ .name = action.tag_name, .value = action.content } };
                 try self.createNodeAt(action.target_node, node_data);
             },
             .CreateText => {
-                const node_data = NodeData{ .text = .{ .text_content = action.text_content } };
+                const node_data = NodeData{ .text = .{ .content = action.content } };
                 try self.createNodeAt(action.target_node, node_data);
             },
             .CreateCDATA => {
-                const node_data = NodeData{ .cdata = .{ .text_content = action.text_content } };
+                const node_data = NodeData{ .cdata = .{ .content = action.content } };
                 try self.createNodeAt(action.target_node, node_data);
             },
             .CreateProcessingInstruction => {
-                const node_data = NodeData{ .proc_inst = .{ .text_content = action.text_content } };
+                const node_data = NodeData{ .proc_inst = .{ .content = action.content } };
                 try self.createNodeAt(action.target_node, node_data);
             },
             .CreateComment => {
-                const node_data = NodeData{ .comment = .{ .text_content = action.text_content } };
+                const node_data = NodeData{ .comment = .{ .content = action.content } };
                 try self.createNodeAt(action.target_node, node_data);
             },
             .CreateDocument => {
@@ -520,7 +717,7 @@ const DOM = struct {
         const element_data = &self.nodes.items[element_idx];
 
         const first_attr = switch (element_data.*) {
-            .element => |e| e.first_attribute,
+            .element => |e| e.first_attr,
             else => return error.NotElement,
         };
 
@@ -556,17 +753,17 @@ const DOM = struct {
         // Append to attribute list
         switch (element_data.*) {
             .element => |*e| {
-                if (e.first_attribute == 0) {
-                    e.first_attribute = new_id;
-                    e.last_attribute = new_id;
+                if (e.first_attr == 0) {
+                    e.first_attr = new_id;
+                    e.last_attr = new_id;
                 } else {
-                    const last_idx = e.last_attribute - 1;
+                    const last_idx = e.last_attr - 1;
                     const last_attr_data = &self.nodes.items[last_idx];
                     switch (last_attr_data.*) {
                         .attribute => |*a| a.next = new_id,
                         else => unreachable,
                     }
-                    e.last_attribute = new_id;
+                    e.last_attr = new_id;
                 }
             },
             else => unreachable,
@@ -581,7 +778,7 @@ const DOM = struct {
         const element_data = &self.nodes.items[element_idx];
 
         var current = switch (element_data.*) {
-            .element => |e| e.first_attribute,
+            .element => |e| e.first_attr,
             else => return error.NotElement,
         };
         var prev: u32 = 0;
@@ -600,7 +797,7 @@ const DOM = struct {
 
                 if (prev == 0) {
                     switch (element_data.*) {
-                        .element => |*e| e.first_attribute = next,
+                        .element => |*e| e.first_attr = next,
                         else => unreachable,
                     }
                 } else {
@@ -612,11 +809,11 @@ const DOM = struct {
                 }
 
                 if (switch (element_data.*) {
-                    .element => |e| e.last_attribute,
+                    .element => |e| e.last_attr,
                     else => unreachable,
                 } == current) {
                     switch (element_data.*) {
-                        .element => |*e| e.last_attribute = prev,
+                        .element => |*e| e.last_attr = prev,
                         else => unreachable,
                     }
                 }
@@ -670,10 +867,10 @@ const DOM = struct {
     pub fn getTextContent(self: *const DOM, node_id: u32) ?[]const u8 {
         if (self.getNode(node_id)) |node| {
             const text_id = switch (node.*) {
-                .text => |t| t.text_content,
-                .cdata => |c| c.text_content,
-                .proc_inst => |p| p.text_content,
-                .comment => |co| co.text_content,
+                .text => |t| t.content,
+                .cdata => |c| c.content,
+                .proc_inst => |p| p.content,
+                .comment => |co| co.content,
                 else => return null,
             };
             return self.strings.getString(text_id);
@@ -681,206 +878,6 @@ const DOM = struct {
         return null;
     }
 };
-
-// Helper functions for creating actions using Builder
-pub fn createDocumentAction(builder: *Builder) !struct { action: Action, node_id: u32 } {
-    const node_id = builder.next_node_id;
-    builder.next_node_id += 1;
-
-    return .{
-        .action = Action{
-            .action_type = .CreateDocument,
-            .target_node = node_id,
-            .new_node = 0,
-            .tag_name = 0,
-            .text_content = 0,
-            .attr_name = 0,
-            .attr_value = 0,
-        },
-        .node_id = node_id,
-    };
-}
-
-pub fn createElementAction(builder: *Builder, tag_name: []const u8) !struct { action: Action, node_id: u32 } {
-    const tag_id = try builder.strings.intern(tag_name);
-    const node_id = builder.next_node_id;
-    builder.next_node_id += 1;
-
-    return .{
-        .action = Action{
-            .action_type = .CreateElement,
-            .target_node = node_id,
-            .new_node = 0,
-            .tag_name = tag_id,
-            .text_content = 0,
-            .attr_name = 0,
-            .attr_value = 0,
-        },
-        .node_id = node_id,
-    };
-}
-
-pub fn createAttributeAction(builder: *Builder, name: []const u8, value: []const u8) !struct { action: Action, node_id: u32 } {
-    const name_id = try builder.strings.intern(name);
-    const value_id = try builder.strings.intern(value);
-    const node_id = builder.next_node_id;
-    builder.next_node_id += 1;
-
-    return .{
-        .action = Action{
-            .action_type = .CreateAttribute,
-            .target_node = node_id,
-            .new_node = 0,
-            .tag_name = name_id,
-            .text_content = value_id,
-            .attr_name = 0,
-            .attr_value = 0,
-        },
-        .node_id = node_id,
-    };
-}
-
-pub fn createTextAction(builder: *Builder, text: []const u8) !struct { action: Action, node_id: u32 } {
-    const text_id = try builder.strings.intern(text);
-    const node_id = builder.next_node_id;
-    builder.next_node_id += 1;
-
-    return .{
-        .action = Action{
-            .action_type = .CreateText,
-            .target_node = node_id,
-            .new_node = 0,
-            .tag_name = 0,
-            .text_content = text_id,
-            .attr_name = 0,
-            .attr_value = 0,
-        },
-        .node_id = node_id,
-    };
-}
-
-pub fn createCDATASectionAction(builder: *Builder, data: []const u8) !struct { action: Action, node_id: u32 } {
-    const data_id = try builder.strings.intern(data);
-    const node_id = builder.next_node_id;
-    builder.next_node_id += 1;
-
-    return .{
-        .action = Action{
-            .action_type = .CreateCDATA,
-            .target_node = node_id,
-            .new_node = 0,
-            .tag_name = 0,
-            .text_content = data_id,
-            .attr_name = 0,
-            .attr_value = 0,
-        },
-        .node_id = node_id,
-    };
-}
-
-pub fn createProcessingInstructionAction(builder: *Builder, target: []const u8, data: []const u8) !struct { action: Action, node_id: u32 } {
-    const target_id = try builder.strings.intern(target);
-    const data_id = try builder.strings.intern(data);
-    const node_id = builder.next_node_id;
-    builder.next_node_id += 1;
-
-    return .{
-        .action = Action{
-            .action_type = .CreateProcessingInstruction,
-            .target_node = node_id,
-            .new_node = 0,
-            .tag_name = target_id,
-            .text_content = data_id,
-            .attr_name = 0,
-            .attr_value = 0,
-        },
-        .node_id = node_id,
-    };
-}
-
-pub fn createCommentAction(builder: *Builder, data: []const u8) !struct { action: Action, node_id: u32 } {
-    const data_id = try builder.strings.intern(data);
-    const node_id = builder.next_node_id;
-    builder.next_node_id += 1;
-
-    return .{
-        .action = Action{
-            .action_type = .CreateComment,
-            .target_node = node_id,
-            .new_node = 0,
-            .tag_name = 0,
-            .text_content = data_id,
-            .attr_name = 0,
-            .attr_value = 0,
-        },
-        .node_id = node_id,
-    };
-}
-
-pub fn appendChildAction(parent_id: u32, child_id: u32) Action {
-    return Action{
-        .action_type = .AppendChild,
-        .target_node = parent_id,
-        .new_node = child_id,
-        .tag_name = 0,
-        .text_content = 0,
-        .attr_name = 0,
-        .attr_value = 0,
-    };
-}
-
-pub fn prependChildAction(parent_id: u32, child_id: u32) Action {
-    return Action{
-        .action_type = .PrependChild,
-        .target_node = parent_id,
-        .new_node = child_id,
-        .tag_name = 0,
-        .text_content = 0,
-        .attr_name = 0,
-        .attr_value = 0,
-    };
-}
-
-pub fn removeChildAction(parent_id: u32, child_id: u32) Action {
-    return Action{
-        .action_type = .RemoveChild,
-        .target_node = parent_id,
-        .new_node = child_id,
-        .tag_name = 0,
-        .text_content = 0,
-        .attr_name = 0,
-        .attr_value = 0,
-    };
-}
-
-pub fn setAttributeAction(builder: *Builder, element_id: u32, name: []const u8, value: []const u8) !Action {
-    const name_id = try builder.strings.intern(name);
-    const value_id = try builder.strings.intern(value);
-
-    return Action{
-        .action_type = .SetAttribute,
-        .target_node = element_id,
-        .new_node = 0,
-        .tag_name = 0,
-        .text_content = 0,
-        .attr_name = name_id,
-        .attr_value = value_id,
-    };
-}
-
-pub fn removeAttributeAction(builder: *Builder, element_id: u32, name: []const u8) !Action {
-    const name_id = try builder.strings.intern(name);
-
-    return Action{
-        .action_type = .RemoveAttribute,
-        .target_node = element_id,
-        .new_node = 0,
-        .tag_name = 0,
-        .text_content = 0,
-        .attr_name = name_id,
-        .attr_value = 0,
-    };
-}
 
 // Node wrapper
 const Node = struct {
@@ -944,25 +941,25 @@ const Node = struct {
     }
 
     pub fn childNodes(self: Node) NodeList {
-        return NodeList{ .world = self.dom, .parent_id = self.id };
+        return NodeList{ .dom = self.dom, .parent_id = self.id };
     }
 };
 
 // NodeList implementation
 const NodeList = struct {
-    world: *const DOM,
+    dom: *const DOM,
     parent_id: u32,
 
     pub fn length(self: NodeList) u32 {
         var count: u32 = 0;
-        var current = switch (self.world.nodes.items[self.parent_id - 1]) {
+        var current = switch (self.dom.nodes.items[self.parent_id - 1]) {
             .document => |d| d.first_child,
             .element => |e| e.first_child,
             else => unreachable,
         };
         while (current != 0) {
             count += 1;
-            current = switch (self.world.nodes.items[current - 1]) {
+            current = switch (self.dom.nodes.items[current - 1]) {
                 .element => |e| e.next,
                 .text => |t| t.next,
                 .cdata => |c| c.next,
@@ -975,7 +972,7 @@ const NodeList = struct {
     }
 
     pub fn item(self: NodeList, index: u32) ?Node {
-        var current = switch (self.world.nodes.items[self.parent_id - 1]) {
+        var current = switch (self.dom.nodes.items[self.parent_id - 1]) {
             .document => |d| d.first_child,
             .element => |e| e.first_child,
             else => unreachable,
@@ -983,10 +980,10 @@ const NodeList = struct {
         var i: u32 = 0;
         while (current != 0) {
             if (i == index) {
-                return Node{ .dom = self.world, .id = current };
+                return Node{ .dom = self.dom, .id = current };
             }
             i += 1;
-            current = switch (self.world.nodes.items[current - 1]) {
+            current = switch (self.dom.nodes.items[current - 1]) {
                 .element => |e| e.next,
                 .text => |t| t.next,
                 .cdata => |c| c.next,
@@ -1007,7 +1004,7 @@ const NamedNodeMap = struct {
     pub fn length(self: NamedNodeMap) u32 {
         var count: u32 = 0;
         var current = switch (self.world.nodes.items[self.element_id - 1]) {
-            .element => |e| e.first_attribute,
+            .element => |e| e.first_attr,
             else => unreachable,
         };
         while (current != 0) {
@@ -1022,7 +1019,7 @@ const NamedNodeMap = struct {
 
     pub fn item(self: NamedNodeMap, index: u32) ?Node {
         var current = switch (self.world.nodes.items[self.element_id - 1]) {
-            .element => |e| e.first_attribute,
+            .element => |e| e.first_attr,
             else => 0,
         };
         var i: u32 = 0;
@@ -1041,7 +1038,7 @@ const NamedNodeMap = struct {
 
     pub fn getNamedItem(self: NamedNodeMap, name: []const u8) ?Node {
         var current = switch (self.world.nodes.items[self.element_id - 1]) {
-            .element => |e| e.first_attribute,
+            .element => |e| e.first_attr,
             else => 0,
         };
         while (current != 0) {
@@ -1293,7 +1290,7 @@ test "set attribute on element" {
     defer new_world.deinit();
 
     const elem_node = new_world.getNode(elem.node_id).?;
-    const first_attr = switch (elem_node.*) {.element => |e| e.first_attribute, else => undefined};
+    const first_attr = switch (elem_node.*) {.element => |e| e.first_attr, else => undefined};
     try testing.expect(first_attr != 0);
 
     const attr_id = first_attr;
