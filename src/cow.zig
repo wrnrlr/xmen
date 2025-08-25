@@ -536,7 +536,7 @@ const DOM = struct {
         return builder;
     }
 
-    // Create a new world by applying transformations (copy-on-write)
+    // Create a new dom by applying transformations (copy-on-write)
     pub fn transform(self: *const DOM, builder: *const Builder, actions: []const Action, allocator: Allocator) !DOM {
         var dom = DOM{
             .nodes = ArrayList(NodeData).init(allocator),
@@ -723,7 +723,6 @@ const DOM = struct {
     }
 };
 
-// Node wrapper
 const Node = struct {
     dom: *const DOM,
     id: u32,
@@ -812,7 +811,6 @@ const Node = struct {
     }
 };
 
-// NodeList implementation
 const NodeList = struct {
     dom: *const DOM,
     parent_id: u32,
@@ -838,7 +836,6 @@ const NodeList = struct {
     }
 };
 
-// NamedNodeMap implementation
 const NamedNodeMap = struct {
     world: *const DOM,
     element_id: u32,
@@ -911,7 +908,6 @@ test "append doc with elem" {
     }, testing.allocator);
     defer dom2.deinit();
 
-    // Verify structure
     if (dom2.nodes.items.len >= doc.node_id) {
         const n = dom2.nodes.items[doc.node_id - 1];
         try testing.expect(std.meta.activeTag(n) == .document);
@@ -1003,7 +999,6 @@ test "append elem with elem" {
     var new_world = try world.transform(&builder, &actions, testing.allocator);
     defer new_world.deinit();
 
-    // Verify structure
     const parent_node_wrapper = Node{ .dom = &new_world, .id = parent.node_id };
     const child_node_wrapper = Node{ .dom = &new_world, .id = child.node_id };
 
