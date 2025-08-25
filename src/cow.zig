@@ -218,10 +218,11 @@ const AppendChildAction = struct {
 
         if (dom.firstChild(parent_idx) == 0) {
             dom.setFirstChild(parent_idx, self.child);
+            dom.setLastChild(parent_idx, self.child);
         } else {
-            const last = dom.lastChild(parent_idx);
-            dom.setNext(last, self.child);
-            dom.setLastChild(last, self.child);
+            const last_idx = dom.lastChild(parent_idx) - 1;
+            dom.setNext(last_idx, self.child);
+            dom.setLastChild(parent_idx, self.child);
         }
     }
 };
@@ -236,12 +237,14 @@ const PrependChildAction = struct {
 
         const parent_idx = self.parent - 1;
         const child_idx = self.child - 1;
-        dom.setParent(child_idx, self.parent);
-        dom.setNext(child_idx, dom.firstChild(parent_idx));
-        dom.setFirstChild(parent_idx, self.child);
 
-        if (dom.firstChild(parent_idx) == 0)
+        const old_first = dom.firstChild(parent_idx);
+        dom.setParent(child_idx, self.parent);
+        dom.setNext(child_idx, old_first);
+        dom.setFirstChild(parent_idx, self.child);
+        if (old_first == 0) {
             dom.setLastChild(parent_idx, self.child);
+        }
     }
 };
 
@@ -649,7 +652,8 @@ const DOM = struct {
 
     fn lastChild(self: DOM, node_id: u32) u32 {
         return switch (self.nodes.items[node_id]) {
-            .element => |e| e.last_attr,
+            .element => |e| e.last_child,
+            .document => |d| d.last_child,
             else => unreachable,
         };
     }
@@ -657,6 +661,7 @@ const DOM = struct {
     fn setLastChild(self: *DOM, node_id: u32, child_id: u32) void {
         switch (self.nodes.items[node_id]) {
             .element => |*e| e.last_child = child_id,
+            .document => |*e| e.last_child = child_id,
             else => unreachable,
         }
     }
@@ -705,7 +710,7 @@ const DOM = struct {
 
     fn attrValue(self: DOM, attr_id: u32) u32 {
       return switch(self.nodes.items[attr_id]) {
-          .attribute => |e| e.name,
+          .attribute => |e| e.value,
           else => unreachable,
       };
     }
@@ -766,7 +771,7 @@ const Node = struct {
     }
 
     pub fn nextSibling(self: Node) ?Node {
-        const sibling_id = self.dom.getNext(self.id);
+        const sibling_id = self.dom.getNext(self.id - 1);
         if (sibling_id == 0) return null;
         return Node{ .dom = self.dom, .id = sibling_id };
     }
