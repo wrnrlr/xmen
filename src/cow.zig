@@ -54,6 +54,7 @@ const TextData = struct {
     content: u32,
     parent: u32 = None,
     next: u32 = None,
+    prev: u32 = None,
 };
 
 const ProcInstData = struct {
@@ -61,6 +62,7 @@ const ProcInstData = struct {
     content: u32,
     parent: u32 = None,
     next: u32 = None,
+    prev: u32 = None,
 };
 
 const NodeData = union(NodeType) {
@@ -70,6 +72,7 @@ const NodeData = union(NodeType) {
         first_child: u32 = None,
         last_child: u32 = None,
         next: u32 = None,
+        prev: u32 = None,
         first_attr: u32 = None,
         last_attr: u32 = None,
     },
@@ -78,6 +81,7 @@ const NodeData = union(NodeType) {
         value: u32,
         parent: u32 = None,
         next: u32 = None,
+        prev: u32 = None,
     },
     text: TextData,
     cdata: TextData,
@@ -162,6 +166,30 @@ const DOM = struct {
             .cdata => |*c| c.next = val,
             .proc_inst => |*p| p.next = val,
             .comment => |*co| co.next = val,
+        }
+    }
+
+    pub fn prev(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
+            .document => None,
+            .element => |e| e.prev,
+            .attribute => |a| a.prev,
+            .text => |t| t.prev,
+            .cdata => |c| c.prev,
+            .proc_inst => |p| p.prev,
+            .comment => |co| co.prev,
+        };
+    }
+
+    pub fn setPrev(self: *DOM, node_id: u32, val: u32) void {
+        switch (self.nodes.items[node_id]) {
+            .document => unreachable,
+            .element => |*e| e.prev = val,
+            .attribute => |*a| a.prev = val,
+            .text => |*t| t.prev = val,
+            .cdata => |*c| c.prev = val,
+            .proc_inst => |*p| p.prev = val,
+            .comment => |*co| co.prev = val,
         }
     }
 
@@ -290,12 +318,13 @@ const DOM = struct {
 
         self.setParent(child_id, parent_id);
         self.setNext(child_id, None);
+        const last_id = self.lastChild(parent_id);
+        self.setPrev(child_id, last_id);
 
         if (self.firstChild(parent_id) == None) {
             self.setFirstChild(parent_id, child_id);
             self.setLastChild(parent_id, child_id);
         } else {
-            const last_id = self.lastChild(parent_id);
             self.setNext(last_id, child_id);
             self.setLastChild(parent_id, child_id);
         }
@@ -305,57 +334,57 @@ const DOM = struct {
         if (parent_id == None or child_id == None or parent_id >= self.nodes.items.len or child_id >= self.nodes.items.len)
             return error.InvalidNodeIndex;
 
-        const old_first = self.firstChild(parent_id);
         self.setParent(child_id, parent_id);
+        const old_first = self.firstChild(parent_id);
         self.setNext(child_id, old_first);
+        self.setPrev(child_id, None);
         self.setFirstChild(parent_id, child_id);
-        if (old_first == None) self.setLastChild(parent_id, child_id);
+        if (old_first == None) {
+            self.setLastChild(parent_id, child_id);
+        } else {
+            self.setPrev(old_first, child_id);
+        }
     }
 
     pub fn removeChild(self: *DOM, parent_id: u32, child_id: u32) !void {
         if (parent_id == None or child_id == None or parent_id >= self.nodes.items.len or child_id >= self.nodes.items.len)
             return error.InvalidNodeIndex;
 
-        var current = self.firstChild(parent_id);
-        var prev: u32 = None;
-        while (current != None) {
-            if (current == child_id) {
-                const n = self.next(current);
+        if (self.parent(child_id) != parent_id) return error.ChildNotFound;
 
-                if (prev == None) {
-                    self.setFirstChild(parent_id, n);
-                } else {
-                    self.setNext(prev, n);
-                }
+        const before = self.prev(child_id);
+        const after = self.next(child_id);
 
-                if (self.lastChild(parent_id) == child_id)
-                    self.setLastChild(parent_id, prev);
-
-                self.setParent(current, None);
-                self.setNext(current, None);
-                return;
-            }
-            prev = current;
-            current = self.next(current);
+        if (before != None) {
+            self.setNext(before, after);
+        } else {
+            self.setFirstChild(parent_id, after);
         }
-        return error.ChildNotFound;
+
+        if (after != None) {
+            self.setPrev(after, before);
+        } else {
+            self.setLastChild(parent_id, before);
+        }
+
+        self.setParent(child_id, None);
+        self.setNext(child_id, None);
+        self.setPrev(child_id, None);
     }
 
     pub fn setAttribute(self: *DOM, element_id: u32, name_id: u32, value_id: u32) !void {
         if (element_id == None or element_id >= self.nodes.items.len) return error.InvalidNodeIndex;
 
         var current = self.firstAttr(element_id);
-        var prev: u32 = None;
         while (current != None) {
             if (self.attrName(current) == name_id) {
                 self.setAttrValue(current, value_id);
                 return;
             }
-            prev = current;
             current = self.next(current);
         }
 
-        const new_id: u32 = @intCast(self.nodes.items.len);
+        const new_id: u32 = @intCast(self.nodes.items.len); // TODO check if this is ok to do.
         try self.createNodeAt(new_id, NodeData{ .attribute = .{ .name = name_id, .value = value_id, .parent = element_id } });
 
         if (self.firstAttr(element_id) == None) {
@@ -364,6 +393,7 @@ const DOM = struct {
         } else {
             const last_id = self.lastAttr(element_id);
             self.setNext(last_id, new_id);
+            self.setPrev(new_id, last_id);
             self.setLastAttr(element_id, new_id);
         }
     }
@@ -372,17 +402,28 @@ const DOM = struct {
         if (element_id == None or element_id >= self.nodes.items.len) return error.InvalidNodeIndex;
 
         var current = self.firstAttr(element_id);
-        var prev: u32 = None;
+        var before: u32 = None;
         while (current != None) {
             if (self.attrName(current) == name_id) {
-                const n = self.next(current);
-                if (prev == None) self.setFirstAttr(element_id, n) else self.setNext(prev, n);
-                if (self.lastAttr(element_id) == current) self.setLastAttr(element_id, prev);
+                const after = self.next(current);
+                if (before == None) {
+                    self.setFirstAttr(element_id, after);
+                } else {
+                    self.setNext(before, after);
+                }
+
+                if (self.lastAttr(element_id) == current) {
+                    self.setLastAttr(element_id, before);
+                } else if (after != None) {
+                    self.setPrev(after, before);
+                }
+
                 self.setParent(current, None);
                 self.setNext(current, None);
+                self.setPrev(current, None);
                 return;
             }
-            prev = current;
+            before = current;
             current = self.next(current);
         }
     }
@@ -622,6 +663,12 @@ const Node = struct {
 
     pub fn nextSibling(self: Node) ?Node {
         const sibling_id = self.dom.next(self.id);
+        if (sibling_id == None) return null;
+        return Node{ .dom = self.dom, .id = sibling_id };
+    }
+
+    pub fn previousSibling(self: Node) ?Node {
+        const sibling_id = self.dom.prev(self.id);
         if (sibling_id == None) return null;
         return Node{ .dom = self.dom, .id = sibling_id };
     }
