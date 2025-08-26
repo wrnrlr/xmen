@@ -244,7 +244,6 @@ const DOM = struct {
         switch (self.nodes.items[attr_idx]) { .attribute => |*a| a.value = value_id, else => unreachable }
     }
 
-    // ------- Composite ops used by Action.apply -------
     fn appendChild(self: *DOM, parent_id: u32, child_id: u32) !void {
         if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len)
             return error.InvalidNodeIndex;
@@ -478,7 +477,6 @@ pub const Builder = struct {
         try self.actions.append(.{ .RemoveAttribute = .{ .element = element, .name = name_id } });
     }
 
-    // ---- build a new DOM snapshot from a base ----
     pub fn buildDom(self: *Builder, base: *const DOM, allocator: Allocator) !DOM {
         var dom = try base.cloneWithBuilderStrings(allocator, &self.strings);
         for (self.actions.items) |a| {
@@ -750,10 +748,10 @@ test "prepend doc with text" {
 }
 
 test "append elem with elem" {
-    var world = try DOM.init(testing.allocator);
-    defer world.deinit();
+    var dom1 = try DOM.init(testing.allocator);
+    defer dom1.deinit();
 
-    var builder = try Builder.fromDom(&world, testing.allocator);
+    var builder = try Builder.fromDom(&dom1, testing.allocator);
     defer builder.deinit();
 
     const doc = try builder.createDocument();
@@ -763,23 +761,23 @@ test "append elem with elem" {
     try builder.appendChild(doc, parent);
     try builder.appendChild(parent, child);
 
-    var new_world = try builder.buildDom(&world, testing.allocator);
-    defer new_world.deinit();
+    var dom2 = try builder.buildDom(&dom1, testing.allocator);
+    defer dom2.deinit();
 
-    const parent_node_wrapper = Node{ .dom = &new_world, .id = parent };
-    const child_node_wrapper = Node{ .dom = &new_world, .id = child };
+    const parent_node_wrapper = Node{ .dom = &dom2, .id = parent };
+    const child_node_wrapper = Node{ .dom = &dom2, .id = child };
 
-    try testing.expect(switch (new_world.nodes.items[parent - 1]) { .element => |e| e.first_child, else => undefined } == child);
+    try testing.expect(switch (dom2.nodes.items[parent - 1]) { .element => |e| e.first_child, else => undefined } == child);
     try testing.expect(child_node_wrapper.parentNode().?.id == parent);
-    try testing.expectEqualStrings("div", new_world.strings.getString(parent_node_wrapper.getTagName().?));
-    try testing.expectEqualStrings("span", new_world.strings.getString(child_node_wrapper.getTagName().?));
+    try testing.expectEqualStrings("div", dom2.strings.getString(parent_node_wrapper.getTagName().?));
+    try testing.expectEqualStrings("span", dom2.strings.getString(child_node_wrapper.getTagName().?));
 }
 
 test "append elem with text" {
-    var world = try DOM.init(testing.allocator);
-    defer world.deinit();
+    var dom1 = try DOM.init(testing.allocator);
+    defer dom1.deinit();
 
-    var builder = try Builder.fromDom(&world, testing.allocator);
+    var builder = try Builder.fromDom(&dom1, testing.allocator);
     defer builder.deinit();
 
     const doc = try builder.createDocument();
@@ -789,22 +787,22 @@ test "append elem with text" {
     try builder.appendChild(doc, elem);
     try builder.appendChild(elem, text);
 
-    var new_world = try builder.buildDom(&world, testing.allocator);
-    defer new_world.deinit();
+    var dom2 = try builder.buildDom(&dom1, testing.allocator);
+    defer dom2.deinit();
 
-    _ = Node{ .dom = &new_world, .id = elem };
-    const text_node_wrapper = Node{ .dom = &new_world, .id = text };
+    _ = Node{ .dom = &dom2, .id = elem };
+    const text_node_wrapper = Node{ .dom = &dom2, .id = text };
 
-    try testing.expect(switch (new_world.nodes.items[elem - 1]) { .element => |e| e.first_child, else => undefined } == text);
+    try testing.expect(switch (dom2.nodes.items[elem - 1]) { .element => |e| e.first_child, else => undefined } == text);
     try testing.expect(text_node_wrapper.parentNode().?.id == elem);
-    try testing.expectEqualStrings("Content", new_world.strings.getString(text_node_wrapper.getTextContent().?));
+    try testing.expectEqualStrings("Content", dom2.strings.getString(text_node_wrapper.getTextContent().?));
 }
 
 test "prepend elem with elem" {
-    var world = try DOM.init(testing.allocator);
-    defer world.deinit();
+    var dom1 = try DOM.init(testing.allocator);
+    defer dom1.deinit();
 
-    var builder = try Builder.fromDom(&world, testing.allocator);
+    var builder = try Builder.fromDom(&dom1, testing.allocator);
     defer builder.deinit();
 
     const doc = try builder.createDocument();
@@ -816,14 +814,14 @@ test "prepend elem with elem" {
     try builder.appendChild(parent, child1);
     try builder.prependChild(parent, child2);
 
-    var new_world = try builder.buildDom(&world, testing.allocator);
-    defer new_world.deinit();
+    var dom2 = try builder.buildDom(&dom1, testing.allocator);
+    defer dom2.deinit();
 
-    _ = Node{ .dom = &new_world, .id = parent };
-    try testing.expect(switch (new_world.nodes.items[parent - 1]) { .element => |e| e.first_child, else => undefined } == child2);
+    _ = Node{ .dom = &dom2, .id = parent };
+    try testing.expect(switch (dom2.nodes.items[parent - 1]) { .element => |e| e.first_child, else => undefined } == child2);
 
-    const child2_node_wrapper = Node{ .dom = &new_world, .id = child2 };
-    try testing.expect(switch (new_world.nodes.items[child2 - 1]) { .element => |e| e.next, else => undefined } == child1);
+    const child2_node_wrapper = Node{ .dom = &dom2, .id = child2 };
+    try testing.expect(switch (dom2.nodes.items[child2 - 1]) { .element => |e| e.next, else => undefined } == child1);
     try testing.expect(child2_node_wrapper.parentNode().?.id == parent);
 }
 
@@ -884,10 +882,10 @@ test "set attribute on element" {
 }
 
 test "remove child" {
-    var world = try DOM.init(testing.allocator);
-    defer world.deinit();
+    var dom1 = try DOM.init(testing.allocator);
+    defer dom1.deinit();
 
-    var builder = try Builder.fromDom(&world, testing.allocator);
+    var builder = try Builder.fromDom(&dom1, testing.allocator);
     defer builder.deinit();
 
     const doc = try builder.createDocument();
@@ -898,15 +896,15 @@ test "remove child" {
     try builder.appendChild(elem, text);
     try builder.removeChild(elem, text);
 
-    var new_world = try builder.buildDom(&world, testing.allocator);
-    defer new_world.deinit();
+    var dom2 = try builder.buildDom(&dom1, testing.allocator);
+    defer dom2.deinit();
 
-    _ = Node{ .dom = &new_world, .id = elem };
-    try testing.expect(switch (new_world.nodes.items[elem - 1]) { .element => |e| e.first_child, else => undefined } == 0);
-    try testing.expect(switch (new_world.nodes.items[elem - 1]) { .element => |e| e.last_child, else => undefined } == 0);
+    _ = Node{ .dom = &dom2, .id = elem };
+    try testing.expect(switch (dom2.nodes.items[elem - 1]) { .element => |e| e.first_child, else => undefined } == 0);
+    try testing.expect(switch (dom2.nodes.items[elem - 1]) { .element => |e| e.last_child, else => undefined } == 0);
 
-    _ = Node{ .dom = &new_world, .id = text };
-    try testing.expect(switch (new_world.nodes.items[text - 1]) { .text => |t| t.parent, else => undefined } == 0);
+    _ = Node{ .dom = &dom2, .id = text };
+    try testing.expect(switch (dom2.nodes.items[text - 1]) { .text => |t| t.parent, else => undefined } == 0);
 }
 
 test "nodelist" {
