@@ -141,7 +141,7 @@ const DOM = struct {
         return std.meta.activeTag(self.nodes.items[node_id]);
     }
 
-    pub fn getNext(self: *const DOM, node_id: u32) u32 {
+    pub fn next(self: *const DOM, node_id: u32) u32 {
         return switch (self.nodes.items[node_id]) {
             .document => None,
             .element => |e| e.next,
@@ -320,12 +320,12 @@ const DOM = struct {
         var prev: u32 = None;
         while (current != None) {
             if (current == child_id) {
-                const next = self.getNext(current);
+                const n = self.next(current);
 
                 if (prev == None) {
-                    self.setFirstChild(parent_id, next);
+                    self.setFirstChild(parent_id, n);
                 } else {
-                    self.setNext(prev, next);
+                    self.setNext(prev, n);
                 }
 
                 if (self.lastChild(parent_id) == child_id)
@@ -336,7 +336,7 @@ const DOM = struct {
                 return;
             }
             prev = current;
-            current = self.getNext(current);
+            current = self.next(current);
         }
         return error.ChildNotFound;
     }
@@ -352,7 +352,7 @@ const DOM = struct {
                 return;
             }
             prev = current;
-            current = self.getNext(current);
+            current = self.next(current);
         }
 
         const new_id: u32 = @intCast(self.nodes.items.len);
@@ -375,7 +375,7 @@ const DOM = struct {
         var prev: u32 = None;
         while (current != None) {
             if (self.attrName(current) == name_id) {
-                const next = self.getNext(current);
+                const next = self.next(current);
                 if (prev == None) self.setFirstAttr(element_id, next) else self.setNext(prev, next);
                 if (self.lastAttr(element_id) == current) self.setLastAttr(element_id, prev);
                 self.setParent(current, None);
@@ -383,7 +383,7 @@ const DOM = struct {
                 return;
             }
             prev = current;
-            current = self.getNext(current);
+            current = self.next(current);
         }
     }
 };
@@ -621,7 +621,7 @@ const Node = struct {
     }
 
     pub fn nextSibling(self: Node) ?Node {
-        const sibling_id = self.dom.getNext(self.id);
+        const sibling_id = self.dom.next(self.id);
         if (sibling_id == None) return null;
         return Node{ .dom = self.dom, .id = sibling_id };
     }
@@ -652,14 +652,14 @@ const NodeList = struct {
     pub fn length(self: NodeList) u32 {
         var count: u32 = 0;
         var current = self.dom.firstChild(self.parent_id);
-        while (current != None) : (current = self.dom.getNext(current)) count += 1;
+        while (current != None) : (current = self.dom.next(current)) count += 1;
         return count;
     }
 
     pub fn item(self: NodeList, index: u32) ?Node {
         var current = self.dom.firstChild(self.parent_id);
         var i: u32 = 0;
-        while (current != None) : (current = self.dom.getNext(current)) {
+        while (current != None) : (current = self.dom.next(current)) {
             if (i == index) return Node{ .dom = self.dom, .id = current };
             i += 1;
         }
@@ -676,7 +676,7 @@ const NamedNodeMap = struct {
     pub fn length(self: NamedNodeMap) u32 {
         var count: u32 = 0;
         var current = self.first_attr();
-        while (current != None) : (current = self.world.getNext(current)) count += 1;
+        while (current != None) : (current = self.world.next(current)) count += 1;
         return count;
     }
 
@@ -686,7 +686,7 @@ const NamedNodeMap = struct {
         while (current != None) {
             if (i == index) return Node{ .dom = self.world, .id = current };
             i += 1;
-            current = self.world.getNext(current);
+            current = self.world.next(current);
         }
         return null;
     }
