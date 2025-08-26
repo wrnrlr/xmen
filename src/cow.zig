@@ -375,8 +375,8 @@ const DOM = struct {
         var prev: u32 = None;
         while (current != None) {
             if (self.attrName(current) == name_id) {
-                const next = self.next(current);
-                if (prev == None) self.setFirstAttr(element_id, next) else self.setNext(prev, next);
+                const n = self.next(current);
+                if (prev == None) self.setFirstAttr(element_id, n) else self.setNext(prev, n);
                 if (self.lastAttr(element_id) == current) self.setLastAttr(element_id, prev);
                 self.setParent(current, None);
                 self.setNext(current, None);
