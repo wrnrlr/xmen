@@ -686,11 +686,9 @@ test "append doc with elem" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    if (dom2.nodes.items.len >= doc) {
-        const n = dom2.nodes.items[doc - 1];
-        try testing.expect(std.meta.activeTag(n) == .document);
-        try testing.expect(switch (n) { .document => |d| d.first_child, else => undefined } == elem);
-    }
+    const doc_node = Node{ .dom = &dom2, .id = doc };
+    try testing.expect(doc_node.nodeType() == .document);
+    try testing.expect(doc_node.firstChild().?.id == elem);
 
     const elem_node = Node{ .dom = &dom2, .id = elem };
     try testing.expect(elem_node.nodeType() == .element);
@@ -712,14 +710,14 @@ test "append doc with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    const doc_node = dom2.nodes.items[doc - 1];
-    try testing.expect(std.meta.activeTag(doc_node) == .document);
-    try testing.expect(switch (doc_node) { .document => |d| d.first_child, else => undefined } == text);
+    const doc_node = Node{ .dom = &dom2, .id = doc };
+    try testing.expect(doc_node.nodeType() == .document);
+    try testing.expect(doc_node.firstChild().?.id == text);
 
-    const text_node_wrapper = Node{ .dom = &dom2, .id = text };
-    try testing.expect(text_node_wrapper.nodeType() == .text);
-    try testing.expect(text_node_wrapper.parentNode().?.id == doc);
-    try testing.expectEqualStrings("Hello World", dom2.strings.getString(text_node_wrapper.getTextContent().?));
+    const text_node = Node{ .dom = &dom2, .id = text };
+    try testing.expect(text_node.nodeType() == .text);
+    try testing.expect(text_node.parentNode().?.id == doc);
+    try testing.expectEqualStrings("Hello World", dom2.strings.getString(text_node.getTextContent().?));
 }
 
 test "prepend doc with text" {
@@ -739,12 +737,12 @@ test "prepend doc with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    const doc_node = dom2.nodes.items[doc - 1];
-    try testing.expect(switch (doc_node) { .document => |d| d.first_child, else => undefined } == text);
+    const doc_node = Node{ .dom = &dom2, .id = doc };
+    try testing.expect(doc_node.firstChild().?.id == text);
 
-    const text_node_wrapper = Node{ .dom = &dom2, .id = text };
-    try testing.expect(switch (dom2.nodes.items[text - 1]) { .text => |t| t.next, else => undefined } == elem);
-    try testing.expectEqualStrings("Hello", dom2.strings.getString(text_node_wrapper.getTextContent().?));
+    const text_node = Node{ .dom = &dom2, .id = text };
+    try testing.expect(text_node.nextSibling().?.id == elem);
+    try testing.expectEqualStrings("Hello", dom2.strings.getString(text_node.getTextContent().?));
 }
 
 test "append elem with elem" {
@@ -764,13 +762,13 @@ test "append elem with elem" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    const parent_node_wrapper = Node{ .dom = &dom2, .id = parent };
-    const child_node_wrapper = Node{ .dom = &dom2, .id = child };
+    const parent_node = Node{ .dom = &dom2, .id = parent };
+    const child_node = Node{ .dom = &dom2, .id = child };
 
-    try testing.expect(switch (dom2.nodes.items[parent - 1]) { .element => |e| e.first_child, else => undefined } == child);
-    try testing.expect(child_node_wrapper.parentNode().?.id == parent);
-    try testing.expectEqualStrings("div", dom2.strings.getString(parent_node_wrapper.getTagName().?));
-    try testing.expectEqualStrings("span", dom2.strings.getString(child_node_wrapper.getTagName().?));
+    try testing.expect(parent_node.firstChild().?.id == child);
+    try testing.expect(child_node.parentNode().?.id == parent);
+    try testing.expectEqualStrings("div", dom2.strings.getString(parent_node.getTagName().?));
+    try testing.expectEqualStrings("span", dom2.strings.getString(child_node.getTagName().?));
 }
 
 test "append elem with text" {
@@ -790,12 +788,12 @@ test "append elem with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    _ = Node{ .dom = &dom2, .id = elem };
-    const text_node_wrapper = Node{ .dom = &dom2, .id = text };
+    const elem_node = Node{ .dom = &dom2, .id = elem };
+    const text_node = Node{ .dom = &dom2, .id = text };
 
-    try testing.expect(switch (dom2.nodes.items[elem - 1]) { .element => |e| e.first_child, else => undefined } == text);
-    try testing.expect(text_node_wrapper.parentNode().?.id == elem);
-    try testing.expectEqualStrings("Content", dom2.strings.getString(text_node_wrapper.getTextContent().?));
+    try testing.expect(elem_node.firstChild().?.id == text);
+    try testing.expect(text_node.parentNode().?.id == elem);
+    try testing.expectEqualStrings("Content", dom2.strings.getString(text_node.getTextContent().?));
 }
 
 test "prepend elem with elem" {
@@ -817,12 +815,12 @@ test "prepend elem with elem" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    _ = Node{ .dom = &dom2, .id = parent };
-    try testing.expect(switch (dom2.nodes.items[parent - 1]) { .element => |e| e.first_child, else => undefined } == child2);
+    const parent_node = Node{ .dom = &dom2, .id = parent };
+    const child2_node = Node{ .dom = &dom2, .id = child2 };
 
-    const child2_node_wrapper = Node{ .dom = &dom2, .id = child2 };
-    try testing.expect(switch (dom2.nodes.items[child2 - 1]) { .element => |e| e.next, else => undefined } == child1);
-    try testing.expect(child2_node_wrapper.parentNode().?.id == parent);
+    try testing.expect(parent_node.firstChild().?.id == child2);
+    try testing.expect(child2_node.nextSibling().?.id == child1);
+    try testing.expect(child2_node.parentNode().?.id == parent);
 }
 
 test "prepend elem with text" {
@@ -844,14 +842,14 @@ test "prepend elem with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    _ = Node{ .dom = &dom2, .id = elem };
-    try testing.expect(switch (dom2.nodes.items[elem - 1]) { .element => |e| e.first_child, else => undefined } == text2);
+    const elem_node = Node{ .dom = &dom2, .id = elem };
+    const text2_node = Node{ .dom = &dom2, .id = text2 };
+    const text1_node = Node{ .dom = &dom2, .id = text1 };
 
-    const text2_node_wrapper = Node{ .dom = &dom2, .id = text2 };
-    const text1_node_wrapper = Node{ .dom = &dom2, .id = text1 };
-    try testing.expect(switch (dom2.nodes.items[text2 - 1]) { .text => |t| t.next, else => undefined } == text1);
-    try testing.expectEqualStrings("Hello ", dom2.strings.getString(text2_node_wrapper.getTextContent().?));
-    try testing.expectEqualStrings("World", dom2.strings.getString(text1_node_wrapper.getTextContent().?));
+    try testing.expect(elem_node.firstChild().?.id == text2);
+    try testing.expect(text2_node.nextSibling().?.id == text1);
+    try testing.expectEqualStrings("Hello ", dom2.strings.getString(text2_node.getTextContent().?));
+    try testing.expectEqualStrings("World", dom2.strings.getString(text1_node.getTextContent().?));
 }
 
 test "set attribute on element" {
@@ -870,15 +868,13 @@ test "set attribute on element" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    _ = Node{ .dom = &dom2, .id = elem };
-    const first_attr = switch (dom2.nodes.items[elem - 1]) { .element => |e| e.first_attr, else => undefined };
+    const first_attr = dom2.firstAttr(elem - 1);
     try testing.expect(first_attr != 0);
 
-    const attr_id = first_attr;
-    const attr_node_wrapper = Node{ .dom = &dom2, .id = attr_id };
-    try testing.expect(attr_node_wrapper.nodeType() == .attribute);
-    try testing.expectEqualStrings("class", dom2.strings.getString(attr_node_wrapper.getAttrName().?));
-    try testing.expectEqualStrings("container", dom2.strings.getString(attr_node_wrapper.getAttrValue().?));
+    const attr_node = Node{ .dom = &dom2, .id = first_attr };
+    try testing.expect(attr_node.nodeType() == .attribute);
+    try testing.expectEqualStrings("class", dom2.strings.getString(attr_node.getAttrName().?));
+    try testing.expectEqualStrings("container", dom2.strings.getString(attr_node.getAttrValue().?));
 }
 
 test "remove child" {
@@ -899,12 +895,12 @@ test "remove child" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    _ = Node{ .dom = &dom2, .id = elem };
-    try testing.expect(switch (dom2.nodes.items[elem - 1]) { .element => |e| e.first_child, else => undefined } == 0);
-    try testing.expect(switch (dom2.nodes.items[elem - 1]) { .element => |e| e.last_child, else => undefined } == 0);
+    const elem_node = Node{ .dom = &dom2, .id = elem };
+    try testing.expect(elem_node.firstChild() == null);
+    try testing.expect(elem_node.lastChild() == null);
 
-    _ = Node{ .dom = &dom2, .id = text };
-    try testing.expect(switch (dom2.nodes.items[text - 1]) { .text => |t| t.parent, else => undefined } == 0);
+    const text_node = Node{ .dom = &dom2, .id = text };
+    try testing.expect(text_node.parentNode() == null);
 }
 
 test "nodelist" {
@@ -926,8 +922,8 @@ test "nodelist" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    const elem_node_wrapper = Node{ .dom = &dom2, .id = elem };
-    const nodes = elem_node_wrapper.childNodes();
+    const elem_node = Node{ .dom = &dom2, .id = elem };
+    const nodes = elem_node.childNodes();
     try testing.expect(nodes.length() == 2);
     try testing.expect(nodes.item(0).?.id == text1);
     try testing.expect(nodes.item(1).?.id == text2);
