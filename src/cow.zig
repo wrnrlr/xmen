@@ -3,6 +3,8 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
+const None: u32 = std.math.maxInt(u32);
+
 const StringPool = struct {
     strings: ArrayList([]const u8),
     map: std.HashMap([]const u8, u32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
@@ -50,33 +52,40 @@ pub const NodeType = enum(u8) {
 
 const TextData = struct {
     content: u32,
-    parent: u32 = 0,
-    next: u32 = 0,
+    parent: u32 = None,
+    next: u32 = None,
+};
+
+const ProcInstData = struct {
+    target: u32,
+    content: u32,
+    parent: u32 = None,
+    next: u32 = None,
 };
 
 const NodeData = union(NodeType) {
     element: struct {
         tag_name: u32,
-        parent: u32 = 0,
-        first_child: u32 = 0,
-        last_child: u32 = 0,
-        next: u32 = 0,
-        first_attr: u32 = 0,
-        last_attr: u32 = 0,
+        parent: u32 = None,
+        first_child: u32 = None,
+        last_child: u32 = None,
+        next: u32 = None,
+        first_attr: u32 = None,
+        last_attr: u32 = None,
     },
     attribute: struct {
         name: u32,
         value: u32,
-        parent: u32 = 0,
-        next: u32 = 0,
+        parent: u32 = None,
+        next: u32 = None,
     },
     text: TextData,
     cdata: TextData,
-    proc_inst: TextData,
+    proc_inst: ProcInstData,
     comment: TextData,
     document: struct {
-        first_child: u32 = 0,
-        last_child: u32 = 0,
+        first_child: u32 = None,
+        last_child: u32 = None,
     },
 };
 
@@ -121,20 +130,20 @@ const DOM = struct {
     }
 
     fn createNodeAt(self: *DOM, node_id: u32, node_data: NodeData) !void {
-        const dummy = NodeData{ .document = .{} };
-        while (self.nodes.items.len < node_id) {
+        const dummy = NodeData{ .document = .{ .first_child = None, .last_child = None } };
+        while (self.nodes.items.len < node_id + 1) {
             try self.nodes.append(dummy);
         }
-        self.nodes.items[node_id - 1] = node_data;
+        self.nodes.items[node_id] = node_data;
     }
 
-    pub fn nodeType(self: *const DOM, node_idx: u32) NodeType {
-        return self.nodes.items[node_idx];
+    pub fn nodeType(self: *const DOM, node_id: u32) NodeType {
+        return std.meta.activeTag(self.nodes.items[node_id]);
     }
 
-    pub fn getNext(self: *const DOM, node_idx: u32) u32 {
-        return switch (self.nodes.items[node_idx]) {
-            .document => 0,
+    pub fn getNext(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
+            .document => None,
             .element => |e| e.next,
             .attribute => |a| a.next,
             .text => |t| t.next,
@@ -144,8 +153,8 @@ const DOM = struct {
         };
     }
 
-    pub fn setNext(self: *DOM, node_idx: u32, val: u32) void {
-        switch (self.nodes.items[node_idx]) {
+    pub fn setNext(self: *DOM, node_id: u32, val: u32) void {
+        switch (self.nodes.items[node_id]) {
             .document => unreachable,
             .element => |*e| e.next = val,
             .attribute => |*a| a.next = val,
@@ -156,9 +165,9 @@ const DOM = struct {
         }
     }
 
-    pub fn parent(self: *const DOM, node_idx: u32) u32 {
-        return switch (self.nodes.items[node_idx]) {
-            .document => 0,
+    pub fn parent(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
+            .document => None,
             .element => |e| e.parent,
             .attribute => |a| a.parent,
             .text => |t| t.parent,
@@ -168,8 +177,8 @@ const DOM = struct {
         };
     }
 
-    pub fn setParent(self: *DOM, node_idx: u32, val: u32) void {
-        switch (self.nodes.items[node_idx]) {
+    pub fn setParent(self: *DOM, node_id: u32, val: u32) void {
+        switch (self.nodes.items[node_id]) {
             .document => unreachable,
             .element => |*e| e.parent = val,
             .attribute => |*a| a.parent = val,
@@ -180,214 +189,201 @@ const DOM = struct {
         }
     }
 
-    pub fn firstChild(self: *const DOM, node_idx: u32) u32 {
-        return switch (self.nodes.items[node_idx]) {
+    pub fn firstChild(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
             .element => |e| e.first_child,
             .document => |d| d.first_child,
             else => unreachable,
         };
     }
 
-    pub fn setFirstChild(self: *DOM, node_idx: u32, child_id: u32) void {
-        switch (self.nodes.items[node_idx]) {
+    pub fn setFirstChild(self: *DOM, node_id: u32, child_id: u32) void {
+        switch (self.nodes.items[node_id]) {
             .element => |*e| e.first_child = child_id,
             .document => |*d| d.first_child = child_id,
             else => unreachable,
         }
     }
 
-    pub fn lastChild(self: *const DOM, node_idx: u32) u32 {
-        return switch (self.nodes.items[node_idx]) {
+    pub fn lastChild(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
             .element => |e| e.last_child,
             .document => |d| d.last_child,
             else => unreachable,
         };
     }
 
-    pub fn setLastChild(self: *DOM, node_idx: u32, child_id: u32) void {
-        switch (self.nodes.items[node_idx]) {
+    pub fn setLastChild(self: *DOM, node_id: u32, child_id: u32) void {
+        switch (self.nodes.items[node_id]) {
             .element => |*e| e.last_child = child_id,
             .document => |*d| d.last_child = child_id,
             else => unreachable,
         }
     }
 
-    pub fn nextSibling(self: *const DOM, id: u32) u32 {
-        return switch (self.nodes.items[id]) {
+    pub fn nextSibling(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
             .element => |e| e.next,
             .text => |t| t.next,
             .attribute => |a| a.next,
-            else => 0,
+            else => None,
         };
     }
 
-    pub fn tagName(self: *const DOM, id: u32) u32 {
-        return switch (self.nodes.items[id]) {
+    pub fn tagName(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
             .element => |e| e.tag_name,
             else => unreachable,
         };
     }
 
-    pub fn textContent(self: *const DOM, id: u32) u32 {
-        return switch (self.nodes.items[id - 1]) {
+    pub fn textContent(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
             .text => |t| t.content,
             else => unreachable,
         };
     }
 
-    pub fn firstAttr(self: *const DOM, node_idx: u32) u32 {
-        return switch (self.nodes.items[node_idx]) {
+    pub fn firstAttr(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
             .element => |e| e.first_attr,
             else => unreachable,
         };
     }
 
-    pub fn setFirstAttr(self: *DOM, node_idx: u32, attr_id: u32) void {
-        switch (self.nodes.items[node_idx]) {
+    pub fn setFirstAttr(self: *DOM, node_id: u32, attr_id: u32) void {
+        switch (self.nodes.items[node_id]) {
             .element => |*e| e.first_attr = attr_id,
             else => unreachable,
         }
     }
 
-    pub fn setLastAttr(self: *DOM, node_idx: u32, attr_id: u32) void {
-        switch (self.nodes.items[node_idx]) {
+    pub fn setLastAttr(self: *DOM, node_id: u32, attr_id: u32) void {
+        switch (self.nodes.items[node_id]) {
             .element => |*e| e.last_attr = attr_id,
             else => unreachable,
         }
     }
 
-    pub fn lastAttr(self: *const DOM, node_idx: u32) u32 {
-        return switch (self.nodes.items[node_idx]) {
+    pub fn lastAttr(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
             .element => |e| e.last_attr,
             else => unreachable,
         };
     }
 
-    pub fn attrName(self: *const DOM, attr_idx: u32) u32 {
-        return switch (self.nodes.items[attr_idx]) { .attribute => |a| a.name, else => unreachable };
+    pub fn attrName(self: *const DOM, attr_id: u32) u32 {
+        return switch (self.nodes.items[attr_id]) { .attribute => |a| a.name, else => unreachable };
     }
 
-    pub fn attrValue(self: *const DOM, attr_idx: u32) u32 {
-        return switch (self.nodes.items[attr_idx]) { .attribute => |a| a.value, else => unreachable };
+    pub fn attrValue(self: *const DOM, attr_id: u32) u32 {
+        return switch (self.nodes.items[attr_id]) { .attribute => |a| a.value, else => unreachable };
     }
 
-    pub fn setAttrValue(self: *DOM, attr_idx: u32, value_id: u32) void {
-        switch (self.nodes.items[attr_idx]) { .attribute => |*a| a.value = value_id, else => unreachable }
+    pub fn setAttrValue(self: *DOM, attr_id: u32, value_id: u32) void {
+        switch (self.nodes.items[attr_id]) { .attribute => |*a| a.value = value_id, else => unreachable }
     }
 
     pub fn appendChild(self: *DOM, parent_id: u32, child_id: u32) !void {
-        if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len)
+        if (parent_id == None or child_id == None or parent_id >= self.nodes.items.len or child_id >= self.nodes.items.len)
             return error.InvalidNodeIndex;
 
-        const parent_idx = parent_id - 1;
-        const child_idx = child_id - 1;
+        self.setParent(child_id, parent_id);
+        self.setNext(child_id, None);
 
-        self.setParent(child_idx, parent_id);
-        self.setNext(child_idx, 0);
-
-        if (self.firstChild(parent_idx) == 0) {
-            self.setFirstChild(parent_idx, child_id);
-            self.setLastChild(parent_idx, child_id);
+        if (self.firstChild(parent_id) == None) {
+            self.setFirstChild(parent_id, child_id);
+            self.setLastChild(parent_id, child_id);
         } else {
-            const last_idx = self.lastChild(parent_idx) - 1;
-            self.setNext(last_idx, child_id);
-            self.setLastChild(parent_idx, child_id);
+            const last_id = self.lastChild(parent_id);
+            self.setNext(last_id, child_id);
+            self.setLastChild(parent_id, child_id);
         }
     }
 
     pub fn prependChild(self: *DOM, parent_id: u32, child_id: u32) !void {
-        if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len)
+        if (parent_id == None or child_id == None or parent_id >= self.nodes.items.len or child_id >= self.nodes.items.len)
             return error.InvalidNodeIndex;
 
-        const parent_idx = parent_id - 1;
-        const child_idx = child_id - 1;
-
-        const old_first = self.firstChild(parent_idx);
-        self.setParent(child_idx, parent_id);
-        self.setNext(child_idx, old_first);
-        self.setFirstChild(parent_idx, child_id);
-        if (old_first == 0) self.setLastChild(parent_idx, child_id);
+        const old_first = self.firstChild(parent_id);
+        self.setParent(child_id, parent_id);
+        self.setNext(child_id, old_first);
+        self.setFirstChild(parent_id, child_id);
+        if (old_first == None) self.setLastChild(parent_id, child_id);
     }
 
     pub fn removeChild(self: *DOM, parent_id: u32, child_id: u32) !void {
-        if (parent_id == 0 or child_id == 0 or parent_id > self.nodes.items.len or child_id > self.nodes.items.len)
+        if (parent_id == None or child_id == None or parent_id >= self.nodes.items.len or child_id >= self.nodes.items.len)
             return error.InvalidNodeIndex;
 
-        const parent_idx = parent_id - 1;
-
-        var current = self.firstChild(parent_idx);
-        var prev: u32 = 0;
-        while (current != 0) {
+        var current = self.firstChild(parent_id);
+        var prev: u32 = None;
+        while (current != None) {
             if (current == child_id) {
-                const current_idx = current - 1;
-                const next = self.getNext(current_idx);
+                const next = self.getNext(current);
 
-                if (prev == 0) {
-                    self.setFirstChild(parent_idx, next);
+                if (prev == None) {
+                    self.setFirstChild(parent_id, next);
                 } else {
-                    self.setNext(prev - 1, next);
+                    self.setNext(prev, next);
                 }
 
-                if (self.lastChild(parent_idx) == child_id)
-                    self.setLastChild(parent_idx, prev);
+                if (self.lastChild(parent_id) == child_id)
+                    self.setLastChild(parent_id, prev);
 
-                self.setParent(current_idx, 0);
-                self.setNext(current_idx, 0);
+                self.setParent(current, None);
+                self.setNext(current, None);
                 return;
             }
             prev = current;
-            current = self.getNext(current - 1);
+            current = self.getNext(current);
         }
         return error.ChildNotFound;
     }
 
     pub fn setAttribute(self: *DOM, element_id: u32, name_id: u32, value_id: u32) !void {
-        if (element_id == 0 or element_id > self.nodes.items.len) return error.InvalidNodeIndex;
-        const element_idx = element_id - 1;
+        if (element_id == None or element_id >= self.nodes.items.len) return error.InvalidNodeIndex;
 
-        var current = self.firstAttr(element_idx);
-        var prev: u32 = 0;
-        while (current != 0) {
-            const attr_idx = current - 1;
-            if (self.attrName(attr_idx) == name_id) {
-                self.setAttrValue(attr_idx, value_id);
+        var current = self.firstAttr(element_id);
+        var prev: u32 = None;
+        while (current != None) {
+            if (self.attrName(current) == name_id) {
+                self.setAttrValue(current, value_id);
                 return;
             }
             prev = current;
-            current = self.getNext(attr_idx);
+            current = self.getNext(current);
         }
 
-        const new_id: u32 = @intCast(self.nodes.items.len + 1);
+        const new_id: u32 = @intCast(self.nodes.items.len);
         try self.createNodeAt(new_id, NodeData{ .attribute = .{ .name = name_id, .value = value_id, .parent = element_id } });
 
-        if (self.firstAttr(element_idx) == 0) {
-            self.setFirstAttr(element_idx, new_id);
-            self.setLastAttr(element_idx, new_id);
+        if (self.firstAttr(element_id) == None) {
+            self.setFirstAttr(element_id, new_id);
+            self.setLastAttr(element_id, new_id);
         } else {
-            const last_idx = self.lastAttr(element_idx) - 1;
-            self.setNext(last_idx, new_id);
-            self.setLastAttr(element_idx, new_id);
+            const last_id = self.lastAttr(element_id);
+            self.setNext(last_id, new_id);
+            self.setLastAttr(element_id, new_id);
         }
     }
 
     pub fn removeAttribute(self: *DOM, element_id: u32, name_id: u32) !void {
-        if (element_id == 0 or element_id > self.nodes.items.len) return error.InvalidNodeIndex;
-        const element_idx = element_id - 1;
+        if (element_id == None or element_id >= self.nodes.items.len) return error.InvalidNodeIndex;
 
-        var current = self.firstAttr(element_idx);
-        var prev: u32 = 0;
-        while (current != 0) {
-            const attr_idx = current - 1;
-            if (self.attrName(attr_idx) == name_id) {
-                const next = self.getNext(attr_idx);
-                if (prev == 0) self.setFirstAttr(element_idx, next) else self.setNext(prev - 1, next);
-                if (self.lastAttr(element_idx) == current) self.setLastAttr(element_idx, prev);
-                self.setParent(attr_idx, 0);
-                self.setNext(attr_idx, 0);
+        var current = self.firstAttr(element_id);
+        var prev: u32 = None;
+        while (current != None) {
+            if (self.attrName(current) == name_id) {
+                const next = self.getNext(current);
+                if (prev == None) self.setFirstAttr(element_id, next) else self.setNext(prev, next);
+                if (self.lastAttr(element_id) == current) self.setLastAttr(element_id, prev);
+                self.setParent(current, None);
+                self.setNext(current, None);
                 return;
             }
             prev = current;
-            current = self.getNext(attr_idx);
+            current = self.getNext(current);
         }
     }
 };
@@ -402,7 +398,7 @@ pub const Builder = struct {
         var res = Builder{
             .allocator = allocator,
             .strings = StringPool.init(allocator),
-            .next_node_id = 1,
+            .next_node_id = 0,
             .actions = ArrayList(Action).init(allocator),
         };
         const empty = try allocator.dupe(u8, "");
@@ -423,7 +419,7 @@ pub const Builder = struct {
         var b = Builder{
             .allocator = allocator,
             .strings = StringPool.init(allocator),
-            .next_node_id = @intCast(dom.nodes.items.len + 1),
+            .next_node_id = @intCast(dom.nodes.items.len),
             .actions = ArrayList(Action).init(allocator),
         };
         // copy strings
@@ -545,6 +541,7 @@ const CreateDocumentAction = struct { node_id: u32 };
 const CreateElementAction = struct { node_id: u32, tag_name: u32 };
 const CreateAttributeAction = struct { node_id: u32, name: u32, value: u32 };
 const CreateTextAction = struct { node_id: u32, content: u32 };
+const CreateProcInstAction = struct { node_id: u32, target: u32, content: u32 };
 const ChildAction = struct { parent: u32, child: u32 };
 const SetAttributeAction = struct { element: u32, name: u32, value: u32 };
 const RemoveAttributeAction = struct { element: u32, name: u32 };
@@ -555,7 +552,7 @@ const Action = union(ActionType) {
     CreateAttribute: CreateAttributeAction,
     CreateText: CreateTextAction,
     CreateCDATA: CreateTextAction,
-    CreateProcessingInstruction: CreateTextAction,
+    CreateProcessingInstruction: CreateProcInstAction,
     CreateComment: CreateTextAction,
     AppendChild: ChildAction,
     PrependChild: ChildAction,
@@ -570,7 +567,7 @@ const Action = union(ActionType) {
             .CreateAttribute => |a| try dom.createNodeAt(a.node_id, NodeData{ .attribute = .{ .name = a.name, .value = a.value } }),
             .CreateText => |a| try dom.createNodeAt(a.node_id, NodeData{ .text = .{ .content = a.content } }),
             .CreateCDATA => |a| try dom.createNodeAt(a.node_id, NodeData{ .cdata = .{ .content = a.content } }),
-            .CreateProcessingInstruction => |a| try dom.createNodeAt(a.node_id, NodeData{ .proc_inst = .{ .content = a.content } }),
+            .CreateProcessingInstruction => |a| try dom.createNodeAt(a.node_id, NodeData{ .proc_inst = .{ .target = a.target, .content = a.content } }),
             .CreateComment => |a| try dom.createNodeAt(a.node_id, NodeData{ .comment = .{ .content = a.content } }),
             .AppendChild => |a| try dom.appendChild(a.parent, a.child),
             .PrependChild => |a| try dom.prependChild(a.parent, a.child),
@@ -585,13 +582,13 @@ const Node = struct {
     dom: *const DOM,
     id: u32,
 
-    inline fn nodeData(self: Node) NodeData { return self.dom.nodes.items[self.id - 1]; }
+    inline fn nodeData(self: Node) NodeData { return self.dom.nodes.items[self.id]; }
 
     pub fn nodeType(self: Node) NodeType { return std.meta.activeTag(self.nodeData()); }
 
     pub fn parentNode(self: Node) ?Node {
         const parent_id = switch (self.nodeData()) {
-            .document => 0,
+            .document => None,
             .element => |e| e.parent,
             .attribute => |a| a.parent,
             .text => |t| t.parent,
@@ -599,7 +596,7 @@ const Node = struct {
             .proc_inst => |p| p.parent,
             .comment => |co| co.parent,
         };
-        if (parent_id == 0) return null;
+        if (parent_id == None) return null;
         return Node{ .dom = self.dom, .id = parent_id };
     }
 
@@ -607,9 +604,9 @@ const Node = struct {
         const child_id = switch (self.nodeData()) {
             .document => |d| d.first_child,
             .element => |e| e.first_child,
-            else => 0,
+            else => None,
         };
-        if (child_id == 0) return null;
+        if (child_id == None) return null;
         return Node{ .dom = self.dom, .id = child_id };
     }
 
@@ -617,15 +614,15 @@ const Node = struct {
         const child_id = switch (self.nodeData()) {
             .document => |d| d.last_child,
             .element => |e| e.last_child,
-            else => 0,
+            else => None,
         };
-        if (child_id == 0) return null;
+        if (child_id == None) return null;
         return Node{ .dom = self.dom, .id = child_id };
     }
 
     pub fn nextSibling(self: Node) ?Node {
-        const sibling_id = self.dom.getNext(self.id - 1);
-        if (sibling_id == 0) return null;
+        const sibling_id = self.dom.getNext(self.id);
+        if (sibling_id == None) return null;
         return Node{ .dom = self.dom, .id = sibling_id };
     }
 
@@ -654,15 +651,15 @@ const NodeList = struct {
 
     pub fn length(self: NodeList) u32 {
         var count: u32 = 0;
-        var current = self.dom.firstChild(self.parent_id - 1);
-        while (current != 0) : (current = self.dom.getNext(current - 1)) count += 1;
+        var current = self.dom.firstChild(self.parent_id);
+        while (current != None) : (current = self.dom.getNext(current)) count += 1;
         return count;
     }
 
     pub fn item(self: NodeList, index: u32) ?Node {
-        var current = self.dom.firstChild(self.parent_id - 1);
+        var current = self.dom.firstChild(self.parent_id);
         var i: u32 = 0;
-        while (current != 0) : (current = self.dom.getNext(current - 1)) {
+        while (current != None) : (current = self.dom.getNext(current)) {
             if (i == index) return Node{ .dom = self.dom, .id = current };
             i += 1;
         }
@@ -674,34 +671,33 @@ const NamedNodeMap = struct {
     world: *const DOM,
     element_id: u32,
 
-    inline fn first_attr(self: NamedNodeMap) u32 { return switch (self.world.nodes.items[self.element_id - 1]) { .element => |e| e.first_attr, else => unreachable }; }
+    inline fn first_attr(self: NamedNodeMap) u32 { return switch (self.world.nodes.items[self.element_id]) { .element => |e| e.first_attr, else => unreachable }; }
 
     pub fn length(self: NamedNodeMap) u32 {
         var count: u32 = 0;
         var current = self.first_attr();
-        while (current != 0) : (current = self.world.getNext(current - 1)) count += 1;
+        while (current != None) : (current = self.world.getNext(current)) count += 1;
         return count;
     }
 
     pub fn item(self: NamedNodeMap, index: u32) ?Node {
         var current = self.first_attr();
         var i: u32 = 0;
-        while (current != 0) {
+        while (current != None) {
             if (i == index) return Node{ .dom = self.world, .id = current };
             i += 1;
-            current = self.world.getNext(current - 1);
+            current = self.world.getNext(current);
         }
         return null;
     }
 
     pub fn getNamedItem(self: NamedNodeMap, name: []const u8) ?Node {
         var current = self.first_attr();
-        while (current != 0) {
-            const attr_idx = current - 1;
-            const attr_name_id = switch (self.world.nodes.items[attr_idx]) { .attribute => |a| a.name, else => 0 };
+        while (current != None) {
+            const attr_name_id = switch (self.world.nodes.items[current]) { .attribute => |a| a.name, else => unreachable };
             const attr_name = self.world.strings.getString(attr_name_id);
             if (std.mem.eql(u8, attr_name, name)) return Node{ .dom = self.world, .id = current };
-            current = switch (self.world.nodes.items[attr_idx]) { .attribute => |a| a.next, else => 0 };
+            current = switch (self.world.nodes.items[current]) { .attribute => |a| a.next, else => unreachable };
         }
         return null;
     }
@@ -721,11 +717,11 @@ test "append doc with elem" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.nodeType(doc - 1) == .document);
-    try testing.expect(dom2.firstChild(doc - 1) == elem);
-    try testing.expect(dom2.nodeType(elem - 1) == .element);
-    try testing.expect(dom2.parent(elem - 1) == doc);
-    try testing.expectEqualStrings("div", dom2.strings.getString(dom2.tagName(elem - 1)));
+    try testing.expect(dom2.nodeType(doc) == .document);
+    try testing.expect(dom2.firstChild(doc) == elem);
+    try testing.expect(dom2.nodeType(elem) == .element);
+    try testing.expect(dom2.parent(elem) == doc);
+    try testing.expectEqualStrings("div", dom2.strings.getString(dom2.tagName(elem)));
 }
 
 test "append doc with text" {
@@ -742,10 +738,10 @@ test "append doc with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.nodeType(doc - 1) == .document);
-    try testing.expect(dom2.firstChild(doc - 1) == text);
-    try testing.expect(dom2.nodeType(text - 1) == .text);
-    try testing.expect(dom2.parent(text - 1) == doc);
+    try testing.expect(dom2.nodeType(doc) == .document);
+    try testing.expect(dom2.firstChild(doc) == text);
+    try testing.expect(dom2.nodeType(text) == .text);
+    try testing.expect(dom2.parent(text) == doc);
     try testing.expectEqualStrings("Hello World", dom2.strings.getString(dom2.textContent(text)));
 }
 
@@ -766,8 +762,8 @@ test "prepend doc with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.firstChild(doc - 1) == text);
-    try testing.expect(dom2.nextSibling(text - 1) == elem);
+    try testing.expect(dom2.firstChild(doc) == text);
+    try testing.expect(dom2.nextSibling(text) == elem);
     try testing.expectEqualStrings("Hello", dom2.strings.getString(dom2.textContent(text)));
 }
 
@@ -788,10 +784,10 @@ test "append elem with elem" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.firstChild(parent - 1) == child);
-    try testing.expect(dom2.parent(child - 1) == parent);
-    try testing.expectEqualStrings("div", dom2.strings.getString(dom2.tagName(parent - 1)));
-    try testing.expectEqualStrings("span", dom2.strings.getString(dom2.tagName(child - 1)));
+    try testing.expect(dom2.firstChild(parent) == child);
+    try testing.expect(dom2.parent(child) == parent);
+    try testing.expectEqualStrings("div", dom2.strings.getString(dom2.tagName(parent)));
+    try testing.expectEqualStrings("span", dom2.strings.getString(dom2.tagName(child)));
 }
 
 test "append elem with text" {
@@ -811,8 +807,8 @@ test "append elem with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.firstChild(elem - 1) == text);
-    try testing.expect(dom2.parent(text - 1) == elem);
+    try testing.expect(dom2.firstChild(elem) == text);
+    try testing.expect(dom2.parent(text) == elem);
     try testing.expectEqualStrings("Content", dom2.strings.getString(dom2.textContent(text)));
 }
 
@@ -835,9 +831,9 @@ test "prepend elem with elem" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.firstChild(parent - 1) == child2);
-    try testing.expect(dom2.nextSibling(child2 - 1) == child1);
-    try testing.expect(dom2.parent(child2 - 1) == parent);
+    try testing.expect(dom2.firstChild(parent) == child2);
+    try testing.expect(dom2.nextSibling(child2) == child1);
+    try testing.expect(dom2.parent(child2) == parent);
 }
 
 test "prepend elem with text" {
@@ -859,8 +855,8 @@ test "prepend elem with text" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.firstChild(elem - 1) == text2);
-    try testing.expect(dom2.nextSibling(text2 - 1) == text1);
+    try testing.expect(dom2.firstChild(elem) == text2);
+    try testing.expect(dom2.nextSibling(text2) == text1);
     try testing.expectEqualStrings("Hello ", dom2.strings.getString(dom2.textContent(text2)));
     try testing.expectEqualStrings("World", dom2.strings.getString(dom2.textContent(text1)));
 }
@@ -881,12 +877,12 @@ test "set attribute on element" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    const first_attr = dom2.firstAttr(elem - 1);
-    try testing.expect(first_attr != 0);
+    const first_attr = dom2.firstAttr(elem);
+    try testing.expect(first_attr != None);
 
-    try testing.expect(dom2.nodeType(first_attr - 1) == .attribute);
-    try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr - 1)));
-    try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr - 1)));
+    try testing.expect(dom2.nodeType(first_attr) == .attribute);
+    try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr)));
+    try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr)));
 }
 
 test "remove child" {
@@ -907,9 +903,9 @@ test "remove child" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.firstChild(elem - 1) == 0);
-    try testing.expect(dom2.lastChild(elem - 1) == 0);
-    try testing.expect(dom2.parent(text - 1) == 0);
+    try testing.expect(dom2.firstChild(elem) == None);
+    try testing.expect(dom2.lastChild(elem) == None);
+    try testing.expect(dom2.parent(text) == None);
 }
 
 test "nodelist" {
@@ -931,10 +927,10 @@ test "nodelist" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    try testing.expect(dom2.firstChild(elem - 1) == text1);
-    try testing.expect(dom2.nextSibling(text1 - 1) == text2);
-    try testing.expect(dom2.nextSibling(text2 - 1) == 0);
-    try testing.expect(dom2.lastChild(elem - 1) == text2);
+    try testing.expect(dom2.firstChild(elem) == text1);
+    try testing.expect(dom2.nextSibling(text1) == text2);
+    try testing.expect(dom2.nextSibling(text2) == None);
+    try testing.expect(dom2.lastChild(elem) == text2);
 }
 
 test "namednodemap" {
@@ -952,17 +948,17 @@ test "namednodemap" {
     var dom2 = try builder.buildDom(&dom1, testing.allocator);
     defer dom2.deinit();
 
-    const first_attr = dom2.firstAttr(elem - 1);
-    try testing.expect(first_attr != 0);
-    try testing.expect(dom2.nodeType(first_attr - 1) == .attribute);
-    try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr - 1)));
-    try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr - 1)));
+    const first_attr = dom2.firstAttr(elem);
+    try testing.expect(first_attr != None);
+    try testing.expect(dom2.nodeType(first_attr) == .attribute);
+    try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr)));
+    try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr)));
 
-    const second_attr = dom2.nextSibling(first_attr - 1);
-    try testing.expect(second_attr != 0);
-    try testing.expect(dom2.nodeType(second_attr - 1) == .attribute);
-    try testing.expectEqualStrings("id", dom2.strings.getString(dom2.attrName(second_attr - 1)));
-    try testing.expectEqualStrings("main", dom2.strings.getString(dom2.attrValue(second_attr - 1)));
+    const second_attr = dom2.nextSibling(first_attr);
+    try testing.expect(second_attr != None);
+    try testing.expect(dom2.nodeType(second_attr) == .attribute);
+    try testing.expectEqualStrings("id", dom2.strings.getString(dom2.attrName(second_attr)));
+    try testing.expectEqualStrings("main", dom2.strings.getString(dom2.attrValue(second_attr)));
 
-    try testing.expect(dom2.nextSibling(second_attr - 1) == 0);
+    try testing.expect(dom2.nextSibling(second_attr) == None);
 }
