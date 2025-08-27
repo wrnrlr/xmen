@@ -3,7 +3,7 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
-const None: u32 = std.math.maxInt(u32);
+pub const None: u32 = std.math.maxInt(u32);
 
 const StringPool = struct {
     strings: ArrayList([]const u8),
@@ -93,7 +93,7 @@ const NodeData = union(NodeType) {
     },
 };
 
-const DOM = struct {
+pub const DOM = struct {
     nodes: ArrayList(NodeData),
     strings: StringPool,
 
@@ -254,6 +254,15 @@ const DOM = struct {
             .element => |e| e.next,
             .text => |t| t.next,
             .attribute => |a| a.next,
+            else => None,
+        };
+    }
+
+    pub fn prevSibling(self: *const DOM, node_id: u32) u32 {
+        return switch (self.nodes.items[node_id]) {
+            .element => |e| e.prev,
+            .text => |t| t.prev,
+            .attribute => |a| a.prev,
             else => None,
         };
     }
@@ -619,137 +628,6 @@ const Action = union(ActionType) {
     }
 };
 
-const Node = struct {
-    dom: *const DOM,
-    id: u32,
-
-    inline fn nodeData(self: Node) NodeData { return self.dom.nodes.items[self.id]; }
-
-    pub fn nodeType(self: Node) NodeType { return std.meta.activeTag(self.nodeData()); }
-
-    pub fn parentNode(self: Node) ?Node {
-        const parent_id = switch (self.nodeData()) {
-            .document => None,
-            .element => |e| e.parent,
-            .attribute => |a| a.parent,
-            .text => |t| t.parent,
-            .cdata => |c| c.parent,
-            .proc_inst => |p| p.parent,
-            .comment => |co| co.parent,
-        };
-        if (parent_id == None) return null;
-        return Node{ .dom = self.dom, .id = parent_id };
-    }
-
-    pub fn firstChild(self: Node) ?Node {
-        const child_id = switch (self.nodeData()) {
-            .document => |d| d.first_child,
-            .element => |e| e.first_child,
-            else => None,
-        };
-        if (child_id == None) return null;
-        return Node{ .dom = self.dom, .id = child_id };
-    }
-
-    pub fn lastChild(self: Node) ?Node {
-        const child_id = switch (self.nodeData()) {
-            .document => |d| d.last_child,
-            .element => |e| e.last_child,
-            else => None,
-        };
-        if (child_id == None) return null;
-        return Node{ .dom = self.dom, .id = child_id };
-    }
-
-    pub fn nextSibling(self: Node) ?Node {
-        const sibling_id = self.dom.next(self.id);
-        if (sibling_id == None) return null;
-        return Node{ .dom = self.dom, .id = sibling_id };
-    }
-
-    pub fn previousSibling(self: Node) ?Node {
-        const sibling_id = self.dom.prev(self.id);
-        if (sibling_id == None) return null;
-        return Node{ .dom = self.dom, .id = sibling_id };
-    }
-
-    pub fn childNodes(self: Node) NodeList { return NodeList{ .dom = self.dom, .parent_id = self.id }; }
-
-    pub fn getTagName(self: Node) ?u32 { return switch (self.nodeData()) { .element => |e| e.tag_name, else => null }; }
-
-    pub fn getAttrName(self: Node) ?u32 { return switch (self.nodeData()) { .attribute => |a| a.name, else => null }; }
-
-    pub fn getAttrValue(self: Node) ?u32 { return switch (self.nodeData()) { .attribute => |a| a.value, else => null }; }
-
-    pub fn getTextContent(self: Node) ?u32 {
-        return switch (self.nodeData()) {
-            .text => |t| t.content,
-            .cdata => |c| c.content,
-            .proc_inst => |p| p.content,
-            .comment => |co| co.content,
-            else => null,
-        };
-    }
-};
-
-const NodeList = struct {
-    dom: *const DOM,
-    parent_id: u32,
-
-    pub fn length(self: NodeList) u32 {
-        var count: u32 = 0;
-        var current = self.dom.firstChild(self.parent_id);
-        while (current != None) : (current = self.dom.next(current)) count += 1;
-        return count;
-    }
-
-    pub fn item(self: NodeList, index: u32) ?Node {
-        var current = self.dom.firstChild(self.parent_id);
-        var i: u32 = 0;
-        while (current != None) : (current = self.dom.next(current)) {
-            if (i == index) return Node{ .dom = self.dom, .id = current };
-            i += 1;
-        }
-        return null;
-    }
-};
-
-const NamedNodeMap = struct {
-    world: *const DOM,
-    element_id: u32,
-
-    inline fn first_attr(self: NamedNodeMap) u32 { return switch (self.world.nodes.items[self.element_id]) { .element => |e| e.first_attr, else => unreachable }; }
-
-    pub fn length(self: NamedNodeMap) u32 {
-        var count: u32 = 0;
-        var current = self.first_attr();
-        while (current != None) : (current = self.world.next(current)) count += 1;
-        return count;
-    }
-
-    pub fn item(self: NamedNodeMap, index: u32) ?Node {
-        var current = self.first_attr();
-        var i: u32 = 0;
-        while (current != None) {
-            if (i == index) return Node{ .dom = self.world, .id = current };
-            i += 1;
-            current = self.world.next(current);
-        }
-        return null;
-    }
-
-    pub fn getNamedItem(self: NamedNodeMap, name: []const u8) ?Node {
-        var current = self.first_attr();
-        while (current != None) {
-            const attr_name_id = switch (self.world.nodes.items[current]) { .attribute => |a| a.name, else => unreachable };
-            const attr_name = self.world.strings.getString(attr_name_id);
-            if (std.mem.eql(u8, attr_name, name)) return Node{ .dom = self.world, .id = current };
-            current = switch (self.world.nodes.items[current]) { .attribute => |a| a.next, else => unreachable };
-        }
-        return null;
-    }
-};
-
 test "append doc with elem" {
     var dom1 = try DOM.init(testing.allocator);
     defer dom1.deinit();
@@ -953,59 +831,4 @@ test "remove child" {
     try testing.expect(dom2.firstChild(elem) == None);
     try testing.expect(dom2.lastChild(elem) == None);
     try testing.expect(dom2.parent(text) == None);
-}
-
-test "nodelist" {
-    var dom1 = try DOM.init(testing.allocator);
-    defer dom1.deinit();
-
-    var builder = try Builder.fromDom(&dom1, testing.allocator);
-    defer builder.deinit();
-
-    const doc = try builder.createDocument();
-    const elem = try builder.createElement("div");
-    const text1 = try builder.createText("Hello");
-    const text2 = try builder.createText("World");
-
-    try builder.appendChild(doc, elem);
-    try builder.appendChild(elem, text1);
-    try builder.appendChild(elem, text2);
-
-    var dom2 = try builder.buildDom(&dom1, testing.allocator);
-    defer dom2.deinit();
-
-    try testing.expect(dom2.firstChild(elem) == text1);
-    try testing.expect(dom2.nextSibling(text1) == text2);
-    try testing.expect(dom2.nextSibling(text2) == None);
-    try testing.expect(dom2.lastChild(elem) == text2);
-}
-
-test "namednodemap" {
-    var dom1 = try DOM.init(testing.allocator);
-    defer dom1.deinit();
-
-    var builder = try Builder.fromDom(&dom1, testing.allocator);
-    defer builder.deinit();
-
-    _ = try builder.createDocument();
-    const elem = try builder.createElement("div");
-    try builder.setAttribute(elem, "class", "container");
-    try builder.setAttribute(elem, "id", "main");
-
-    var dom2 = try builder.buildDom(&dom1, testing.allocator);
-    defer dom2.deinit();
-
-    const first_attr = dom2.firstAttr(elem);
-    try testing.expect(first_attr != None);
-    try testing.expect(dom2.nodeType(first_attr) == .attribute);
-    try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr)));
-    try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr)));
-
-    const second_attr = dom2.nextSibling(first_attr);
-    try testing.expect(second_attr != None);
-    try testing.expect(dom2.nodeType(second_attr) == .attribute);
-    try testing.expectEqualStrings("id", dom2.strings.getString(dom2.attrName(second_attr)));
-    try testing.expectEqualStrings("main", dom2.strings.getString(dom2.attrValue(second_attr)));
-
-    try testing.expect(dom2.nextSibling(second_attr) == None);
 }
