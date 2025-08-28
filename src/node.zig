@@ -31,10 +31,10 @@ const Node = struct {
     }
 
     pub fn lastChild(self: Node) ?Node {
-      return switch (self.nodeType()) {
-          .document, .element => self.createNode(self.dom.lastChild(self.id)),
-          else => null,
-      };
+        return switch (self.nodeType()) {
+            .document, .element => self.createNode(self.dom.lastChild(self.id)),
+            else => null,
+        };
     }
 
     pub fn nextSibling(self: Node) ?Node {
@@ -42,7 +42,7 @@ const Node = struct {
     }
 
     pub fn prevSibling(self: Node) ?Node {
-      return self.createNode(self.dom.prevSibling(self.id));
+        return self.createNode(self.dom.prevSibling(self.id));
     }
 
     pub fn childNodes(self: Node) NodeList { return NodeList{ .dom = self.dom, .parent_id = self.id }; }

@@ -141,6 +141,20 @@ pub const DOM = struct {
         self.nodes.items[node_id] = node_data;
     }
 
+    pub fn createElem(self: *DOM, node_id: u32, tag: u32) !void { try self.createNodeAt(node_id, .{ .element = .{ .tag_name = tag } }); }
+
+    pub fn createAttr(self: *DOM, node_id: u32, name: u32, value: u32) !void { try self.createNodeAt(node_id, .{ .attribute = .{ .name = name, .value = value } }); }
+
+    pub fn createText(self: *DOM, node_id: u32, content: u32) !void { try self.createNodeAt(node_id, .{ .text = .{ .content = content } }); }
+
+    pub fn createComment(self: *DOM, node_id: u32, content: u32) !void { try self.createNodeAt(node_id, .{ .text = .{ .content = content } }); }
+
+    pub fn createCData(self: *DOM, node_id: u32, content: u32) !void { try self.createNodeAt(node_id, .{ .text = .{ .content = content } }); }
+
+    pub fn createProcInst(self: *DOM, node_id: u32, content: u32) !void { try self.createNodeAt(node_id, .{ .text = .{ .content = content } }); }
+
+    pub fn createDoc(self: *DOM, node_id: u32) !void { try self.createNodeAt(node_id, .{ .document = .{} }); }
+
     pub fn nodeType(self: *const DOM, node_id: u32) NodeType {
         return std.meta.activeTag(self.nodes.items[node_id]);
     }
@@ -612,13 +626,13 @@ const Action = union(ActionType) {
 
     fn apply(self: Action, dom: *DOM) !void {
         switch (self) {
-            .CreateDocument => |a| try dom.createNodeAt(a.node_id, NodeData{ .document = .{} }),
-            .CreateElement => |a| try dom.createNodeAt(a.node_id, NodeData{ .element = .{ .tag_name = a.tag_name } }),
-            .CreateAttribute => |a| try dom.createNodeAt(a.node_id, NodeData{ .attribute = .{ .name = a.name, .value = a.value } }),
-            .CreateText => |a| try dom.createNodeAt(a.node_id, NodeData{ .text = .{ .content = a.content } }),
-            .CreateCDATA => |a| try dom.createNodeAt(a.node_id, NodeData{ .cdata = .{ .content = a.content } }),
-            .CreateProcessingInstruction => |a| try dom.createNodeAt(a.node_id, NodeData{ .proc_inst = .{ .target = a.target, .content = a.content } }),
-            .CreateComment => |a| try dom.createNodeAt(a.node_id, NodeData{ .comment = .{ .content = a.content } }),
+            .CreateDocument => |a| try dom.createDoc(a.node_id),
+            .CreateElement => |a| try dom.createElem(a.node_id,  a.tag_name),
+            .CreateAttribute => |a| try dom.createAttr(a.node_id, a.name,  a.value),
+            .CreateText => |a| try dom.createText(a.node_id, a.content),
+            .CreateCDATA => |a| try dom.createCData(a.node_id, a.content),
+            .CreateProcessingInstruction => |a| try dom.createProcInst(a.node_id, a.content),
+            .CreateComment => |a| try dom.createComment(a.node_id, a.content),
             .AppendChild => |a| try dom.appendChild(a.parent, a.child),
             .PrependChild => |a| try dom.prependChild(a.parent, a.child),
             .RemoveChild => |a| try dom.removeChild(a.parent, a.child),
