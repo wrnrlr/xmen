@@ -98,14 +98,11 @@ pub const DOM = struct {
     nodes: ArrayList(NodeData),
     strings: StringPool,
 
-    pub fn init(allocator: Allocator) !DOM {
-        var res = DOM{
+    pub fn init(allocator: Allocator) DOM {
+        return DOM{
             .nodes = ArrayList(NodeData).init(allocator),
             .strings = StringPool.init(allocator),
         };
-        const empty = try allocator.dupe(u8, "");
-        try res.strings.strings.append(empty);
-        return res;
     }
 
     pub fn deinit(self: *DOM) void {
@@ -455,60 +452,22 @@ pub const DOM = struct {
 
 pub const Builder = struct {
     allocator: Allocator,
-    // dom: *DOM,
     strings: StringPool,
     actions: ArrayList(Action),
     next_id: u32 = 0,
 
     pub fn init(allocator: Allocator) !Builder {
-        // const dom_ptr = try allocator.create(DOM);
-        // errdefer allocator.destroy(dom_ptr);
-        // dom_ptr.* = try DOM.init(allocator);
-        // errdefer dom_ptr.deinit();
         return Builder{
             .allocator = allocator,
-            // .dom = dom_ptr,
             .strings = StringPool.init(allocator),
             .actions = ArrayList(Action).init(allocator),
         };
     }
 
-    // pub fn initEmptyDoc(allocator: std.mem.Allocator) !Builder {
-    //   const dom_ptr = try allocator.create(DOM);
-    //   errdefer allocator.destroy(dom_ptr);
-    //   dom_ptr.* = try DOM.init(allocator);
-
-    //   return Builder{
-    //       .allocator = allocator,
-    //       .dom = dom_ptr,
-    //       .strings = StringPool.init(allocator),
-    //       .actions = ArrayList(Action).init(allocator),
-    //   };
-    // }
-
-    // pub fn initWithDom(allocator: Allocator, dom: *DOM) !Builder {
-    //     var b = Builder{
-    //         .allocator = allocator,
-    //         .dom = dom,
-    //         .strings = StringPool.init(allocator),
-    //         .next_id = @intCast(dom.nodes.items.len),
-    //         .actions = ArrayList(Action).init(allocator),
-    //     };
-    //     // copy strings
-    //     for (dom.strings.strings.items) |s| {
-    //         const dup = try allocator.dupe(u8, s);
-    //         try b.strings.strings.append(dup);
-    //     }
-    //     var it = dom.strings.map.iterator();
-    //     while (it.next()) |entry| {
-    //         const new_s = b.strings.strings.items[entry.value_ptr.*];
-    //         try b.strings.map.put(new_s, entry.value_ptr.*);
-    //     }
-    //     return b;
-    // }
-
     pub fn build(self: *Builder) !DOM {
-        var dom = try DOM.init(self.allocator);
+        var empty_dom = DOM.init(self.allocator);
+        var dom = try empty_dom.cloneWithBuilderStrings(self.allocator, &self.strings);
+        empty_dom.deinit();
 
         for (self.actions.items) |a| {
             try a.apply(&dom);
@@ -669,186 +628,162 @@ test "append doc with elem" {
     try testing.expectEqualStrings("div", dom.strings.getString(dom.tagName(elem)));
 }
 
-// test "append doc with text" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
+test "append doc with text" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
+    const doc = try builder.createDocument();
+    const text = try builder.createText("Hello World");
+    try builder.appendChild(doc, text);
 
-//     const doc = try builder.createDocument();
-//     const text = try builder.createText("Hello World");
-//     try builder.appendChild(doc, text);
+    var dom = try builder.build();
+    defer dom.deinit();
 
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
+    try testing.expect(dom.nodeType(doc) == .document);
+    try testing.expect(dom.firstChild(doc) == text);
+    try testing.expect(dom.nodeType(text) == .text);
+    try testing.expect(dom.parent(text) == doc);
+    try testing.expectEqualStrings("Hello World", dom.strings.getString(dom.textContent(text)));
+}
 
-//     try testing.expect(dom2.nodeType(doc) == .document);
-//     try testing.expect(dom2.firstChild(doc) == text);
-//     try testing.expect(dom2.nodeType(text) == .text);
-//     try testing.expect(dom2.parent(text) == doc);
-//     try testing.expectEqualStrings("Hello World", dom2.strings.getString(dom2.textContent(text)));
-// }
+test "prepend doc with text" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-// test "prepend doc with text" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
+    const doc = try builder.createDocument();
+    const elem = try builder.createElement("div");
+    const text = try builder.createText("Hello");
 
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
+    try builder.appendChild(doc, elem);
+    try builder.prependChild(doc, text);
 
-//     const doc = try builder.createDocument();
-//     const elem = try builder.createElement("div");
-//     const text = try builder.createText("Hello");
+    var dom = try builder.build();
+    defer dom.deinit();
 
-//     try builder.appendChild(doc, elem);
-//     try builder.prependChild(doc, text);
+    try testing.expect(dom.firstChild(doc) == text);
+    try testing.expect(dom.nextSibling(text) == elem);
+    try testing.expectEqualStrings("Hello", dom.strings.getString(dom.textContent(text)));
+}
 
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
+test "append elem with elem" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-//     try testing.expect(dom2.firstChild(doc) == text);
-//     try testing.expect(dom2.nextSibling(text) == elem);
-//     try testing.expectEqualStrings("Hello", dom2.strings.getString(dom2.textContent(text)));
-// }
+    const doc = try builder.createDocument();
+    const parent = try builder.createElement("div");
+    const child = try builder.createElement("span");
 
-// test "append elem with elem" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
+    try builder.appendChild(doc, parent);
+    try builder.appendChild(parent, child);
 
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
+    var dom2 = try builder.build();
+    defer dom2.deinit();
 
-//     const doc = try builder.createDocument();
-//     const parent = try builder.createElement("div");
-//     const child = try builder.createElement("span");
+    try testing.expect(dom2.firstChild(parent) == child);
+    try testing.expect(dom2.parent(child) == parent);
+    try testing.expectEqualStrings("div", dom2.strings.getString(dom2.tagName(parent)));
+    try testing.expectEqualStrings("span", dom2.strings.getString(dom2.tagName(child)));
+}
 
-//     try builder.appendChild(doc, parent);
-//     try builder.appendChild(parent, child);
+test "append elem with text" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
+    const doc = try builder.createDocument();
+    const elem = try builder.createElement("p");
+    const text = try builder.createText("Content");
 
-//     try testing.expect(dom2.firstChild(parent) == child);
-//     try testing.expect(dom2.parent(child) == parent);
-//     try testing.expectEqualStrings("div", dom2.strings.getString(dom2.tagName(parent)));
-//     try testing.expectEqualStrings("span", dom2.strings.getString(dom2.tagName(child)));
-// }
+    try builder.appendChild(doc, elem);
+    try builder.appendChild(elem, text);
 
-// test "append elem with text" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
+    var dom = try builder.build();
+    defer dom.deinit();
 
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
+    try testing.expect(dom.firstChild(elem) == text);
+    try testing.expect(dom.parent(text) == elem);
+    try testing.expectEqualStrings("Content", dom.strings.getString(dom.textContent(text)));
+}
 
-//     const doc = try builder.createDocument();
-//     const elem = try builder.createElement("p");
-//     const text = try builder.createText("Content");
+test "prepend elem with elem" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-//     try builder.appendChild(doc, elem);
-//     try builder.appendChild(elem, text);
+    const doc = try builder.createDocument();
+    const parent = try builder.createElement("ul");
+    const child1 = try builder.createElement("li");
+    const child2 = try builder.createElement("li");
 
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
+    try builder.appendChild(doc, parent);
+    try builder.appendChild(parent, child1);
+    try builder.prependChild(parent, child2);
 
-//     try testing.expect(dom2.firstChild(elem) == text);
-//     try testing.expect(dom2.parent(text) == elem);
-//     try testing.expectEqualStrings("Content", dom2.strings.getString(dom2.textContent(text)));
-// }
+    var dom2 = try builder.build();
+    defer dom2.deinit();
 
-// test "prepend elem with elem" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
+    try testing.expect(dom2.firstChild(parent) == child2);
+    try testing.expect(dom2.nextSibling(child2) == child1);
+    try testing.expect(dom2.parent(child2) == parent);
+}
 
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
+test "prepend elem with text" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-//     const doc = try builder.createDocument();
-//     const parent = try builder.createElement("ul");
-//     const child1 = try builder.createElement("li");
-//     const child2 = try builder.createElement("li");
+    const doc = try builder.createDocument();
+    const elem = try builder.createElement("h1");
+    const text1 = try builder.createText("World");
+    const text2 = try builder.createText("Hello ");
 
-//     try builder.appendChild(doc, parent);
-//     try builder.appendChild(parent, child1);
-//     try builder.prependChild(parent, child2);
+    try builder.appendChild(doc, elem);
+    try builder.appendChild(elem, text1);
+    try builder.prependChild(elem, text2);
 
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
+    var dom = try builder.build();
+    defer dom.deinit();
 
-//     try testing.expect(dom2.firstChild(parent) == child2);
-//     try testing.expect(dom2.nextSibling(child2) == child1);
-//     try testing.expect(dom2.parent(child2) == parent);
-// }
+    try testing.expect(dom.firstChild(elem) == text2);
+    try testing.expect(dom.nextSibling(text2) == text1);
+    try testing.expectEqualStrings("Hello ", dom.strings.getString(dom.textContent(text2)));
+    try testing.expectEqualStrings("World", dom.strings.getString(dom.textContent(text1)));
+}
 
-// test "prepend elem with text" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
+test "set attribute on element" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
+    const doc = try builder.createDocument();
+    const elem = try builder.createElement("div");
 
-//     const doc = try builder.createDocument();
-//     const elem = try builder.createElement("h1");
-//     const text1 = try builder.createText("World");
-//     const text2 = try builder.createText("Hello ");
+    try builder.appendChild(doc, elem);
+    try builder.setAttribute(elem, "class", "container");
 
-//     try builder.appendChild(doc, elem);
-//     try builder.appendChild(elem, text1);
-//     try builder.prependChild(elem, text2);
+    var dom2 = try builder.build();
+    defer dom2.deinit();
 
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
+    const first_attr = dom2.firstAttr(elem);
+    try testing.expect(first_attr != None);
 
-//     try testing.expect(dom2.firstChild(elem) == text2);
-//     try testing.expect(dom2.nextSibling(text2) == text1);
-//     try testing.expectEqualStrings("Hello ", dom2.strings.getString(dom2.textContent(text2)));
-//     try testing.expectEqualStrings("World", dom2.strings.getString(dom2.textContent(text1)));
-// }
+    try testing.expect(dom2.nodeType(first_attr) == .attribute);
+    try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr)));
+    try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr)));
+}
 
-// test "set attribute on element" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
+test "remove child" {
+    var builder = try Builder.init(testing.allocator);
+    defer builder.deinit();
 
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
+    const doc = try builder.createDocument();
+    const elem = try builder.createElement("div");
+    const text = try builder.createText("Hello");
 
-//     const doc = try builder.createDocument();
-//     const elem = try builder.createElement("div");
+    try builder.appendChild(doc, elem);
+    try builder.appendChild(elem, text);
+    try builder.removeChild(elem, text);
 
-//     try builder.appendChild(doc, elem);
-//     try builder.setAttribute(elem, "class", "container");
+    var dom2 = try builder.build();
+    defer dom2.deinit();
 
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
-
-//     const first_attr = dom2.firstAttr(elem);
-//     try testing.expect(first_attr != None);
-
-//     try testing.expect(dom2.nodeType(first_attr) == .attribute);
-//     try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr)));
-//     try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr)));
-// }
-
-// test "remove child" {
-//     var dom1 = try DOM.init(testing.allocator);
-//     defer dom1.deinit();
-
-//     var builder = try Builder.fromDom(&dom1, testing.allocator);
-//     defer builder.deinit();
-
-//     const doc = try builder.createDocument();
-//     const elem = try builder.createElement("div");
-//     const text = try builder.createText("Hello");
-
-//     try builder.appendChild(doc, elem);
-//     try builder.appendChild(elem, text);
-//     try builder.removeChild(elem, text);
-
-//     var dom2 = try builder.buildDom(&dom1, testing.allocator);
-//     defer dom2.deinit();
-
-//     try testing.expect(dom2.firstChild(elem) == None);
-//     try testing.expect(dom2.lastChild(elem) == None);
-//     try testing.expect(dom2.parent(text) == None);
-// }
+    try testing.expect(dom2.firstChild(elem) == None);
+    try testing.expect(dom2.lastChild(elem) == None);
+    try testing.expect(dom2.parent(text) == None);
+}
