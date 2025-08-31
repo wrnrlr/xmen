@@ -134,7 +134,7 @@ const NamedNodeMap = struct {
 const testing = std.testing;
 
 test "nodelist" {
-    var dom1 = try DOM.init(testing.allocator);
+    var dom1 = DOM.init(testing.allocator);
     defer dom1.deinit();
 
     var builder = try Builder.fromDom(&dom1, testing.allocator);
@@ -149,7 +149,7 @@ test "nodelist" {
     try builder.appendChild(elem, text1);
     try builder.appendChild(elem, text2);
 
-    var dom2 = try builder.buildDom(&dom1, testing.allocator);
+    var dom2 = try builder.buildDom();
     defer dom2.deinit();
 
     try testing.expect(dom2.firstChild(elem) == text1);
@@ -159,10 +159,7 @@ test "nodelist" {
 }
 
 test "namednodemap" {
-    var dom1 = try DOM.init(testing.allocator);
-    defer dom1.deinit();
-
-    var builder = try Builder.fromDom(&dom1, testing.allocator);
+    var builder = try Builder.init(testing.allocator);
     defer builder.deinit();
 
     _ = try builder.createDocument();
@@ -170,7 +167,7 @@ test "namednodemap" {
     try builder.setAttribute(elem, "class", "container");
     try builder.setAttribute(elem, "id", "main");
 
-    var dom2 = try builder.buildDom(&dom1, testing.allocator);
+    var dom2 = try builder.build();
     defer dom2.deinit();
 
     const first_attr = dom2.firstAttr(elem);

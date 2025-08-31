@@ -23,14 +23,6 @@ const TextData = struct {
     prev: u32 = None,
 };
 
-const ProcInstData = struct {
-    target: u32,
-    content: u32,
-    parent: u32 = None,
-    next: u32 = None,
-    prev: u32 = None,
-};
-
 const NodeData = union(NodeType) {
     element: struct {
         tag_name: u32,
@@ -51,7 +43,7 @@ const NodeData = union(NodeType) {
     },
     text: TextData,
     cdata: TextData,
-    proc_inst: ProcInstData,
+    proc_inst: TextData,
     comment: TextData,
     document: struct {
         first_child: u32 = None,
@@ -63,9 +55,7 @@ pub const DOM = struct {
     nodes: ArrayList(NodeData),
 
     pub fn init(allocator: Allocator) DOM {
-        return DOM{
-            .nodes = ArrayList(NodeData).init(allocator),
-        };
+        return .{ .nodes = ArrayList(NodeData).init(allocator) };
     }
 
     pub fn deinit(self: *DOM) void {
@@ -90,7 +80,7 @@ pub const DOM = struct {
 
     pub fn createCData(self: *DOM, node_id: u32, content: u32) !void { try self.createNodeAt(node_id, .{ .cdata = .{ .content = content } }); }
 
-    pub fn createProcInst(self: *DOM, node_id: u32, target: u32, content: u32) !void { try self.createNodeAt(node_id, .{ .proc_inst = .{ .target = target, .content = content } }); }
+    pub fn createProcInst(self: *DOM, node_id: u32, content: u32) !void { try self.createNodeAt(node_id, .{ .proc_inst = .{ .content = content } }); }
 
     pub fn createDoc(self: *DOM, node_id: u32) !void { try self.createNodeAt(node_id, .{ .document = .{} }); }
 
@@ -103,10 +93,7 @@ pub const DOM = struct {
             .document => None,
             .element => |e| e.next,
             .attribute => |a| a.next,
-            .text => |t| t.next,
-            .cdata => |c| c.next,
-            .proc_inst => |p| p.next,
-            .comment => |co| co.next,
+            .text, .cdata, .comment, .proc_inst => |t| t.next,
         };
     }
 
@@ -115,10 +102,7 @@ pub const DOM = struct {
             .document => unreachable,
             .element => |*e| e.next = val,
             .attribute => |*a| a.next = val,
-            .text => |*t| t.next = val,
-            .cdata => |*c| c.next = val,
-            .proc_inst => |*p| p.next = val,
-            .comment => |*co| co.next = val,
+            .text, .cdata, .comment, .proc_inst => |*t| t.next = val,
         }
     }
 
@@ -127,10 +111,7 @@ pub const DOM = struct {
             .document => None,
             .element => |e| e.prev,
             .attribute => |a| a.prev,
-            .text => |t| t.prev,
-            .cdata => |c| c.prev,
-            .proc_inst => |p| p.prev,
-            .comment => |co| co.prev,
+            .text, .cdata, .comment, .proc_inst => |t| t.prev,
         };
     }
 
@@ -139,10 +120,7 @@ pub const DOM = struct {
             .document => unreachable,
             .element => |*e| e.prev = val,
             .attribute => |*a| a.prev = val,
-            .text => |*t| t.prev = val,
-            .cdata => |*c| c.prev = val,
-            .proc_inst => |*p| p.prev = val,
-            .comment => |*co| co.prev = val,
+            .text, .cdata, .comment, .proc_inst => |*t| t.prev = val,
         }
     }
 
@@ -151,10 +129,7 @@ pub const DOM = struct {
             .document => None,
             .element => |e| e.parent,
             .attribute => |a| a.parent,
-            .text => |t| t.parent,
-            .cdata => |c| c.parent,
-            .proc_inst => |p| p.parent,
-            .comment => |co| co.parent,
+            .text, .cdata, .comment, .proc_inst => |p| p.parent,
         };
     }
 
@@ -163,10 +138,7 @@ pub const DOM = struct {
             .document => unreachable,
             .element => |*e| e.parent = val,
             .attribute => |*a| a.parent = val,
-            .text => |*t| t.parent = val,
-            .cdata => |*c| c.parent = val,
-            .proc_inst => |*p| p.parent = val,
-            .comment => |*co| co.parent = val,
+            .text, .cdata, .comment, .proc_inst => |*t| t.parent = val,
         }
     }
 
@@ -205,18 +177,18 @@ pub const DOM = struct {
     pub fn nextSibling(self: *const DOM, node_id: u32) u32 {
         return switch (self.nodes.items[node_id]) {
             .element => |e| e.next,
-            .text => |t| t.next,
             .attribute => |a| a.next,
-            else => None,
+            .text, .cdata, .comment, .proc_inst => |t| t.next,
+            .document => None,
         };
     }
 
     pub fn prevSibling(self: *const DOM, node_id: u32) u32 {
         return switch (self.nodes.items[node_id]) {
             .element => |e| e.prev,
-            .text => |t| t.prev,
             .attribute => |a| a.prev,
-            else => None,
+            .text, .cdata, .comment, .proc_inst => |t| t.prev,
+            .document => None,
         };
     }
 
@@ -229,7 +201,7 @@ pub const DOM = struct {
 
     pub fn textContent(self: *const DOM, node_id: u32) u32 {
         return switch (self.nodes.items[node_id]) {
-            .text => |t| t.content,
+            .text, .cdata, .comment, .proc_inst => |t| t.content,
             else => unreachable,
         };
     }
@@ -479,21 +451,6 @@ pub const Builder = struct {
     }
 };
 
-const ActionType = enum {
-    CreateDocument,
-    CreateElement,
-    CreateAttribute,
-    CreateText,
-    CreateCDATA,
-    CreateProcessingInstruction,
-    CreateComment,
-    AppendChild,
-    PrependChild,
-    RemoveChild,
-    SetAttribute,
-    RemoveAttribute,
-};
-
 const CreateDocumentAction = struct { node_id: u32 };
 const CreateElementAction = struct { node_id: u32, tag_name: u32 };
 const CreateAttributeAction = struct { node_id: u32, name: u32, value: u32 };
@@ -503,7 +460,7 @@ const ChildAction = struct { parent: u32, child: u32 };
 const SetAttributeAction = struct { element: u32, name: u32, value: u32 };
 const RemoveAttributeAction = struct { element: u32, name: u32 };
 
-const Action = union(ActionType) {
+const Action = union(enum) {
     CreateDocument: CreateDocumentAction,
     CreateElement: CreateElementAction,
     CreateAttribute: CreateAttributeAction,
@@ -524,7 +481,7 @@ const Action = union(ActionType) {
             .CreateAttribute => |a| try dom.createAttr(a.node_id, a.name,  a.value),
             .CreateText => |a| try dom.createText(a.node_id, a.content),
             .CreateCDATA => |a| try dom.createCData(a.node_id, a.content),
-            .CreateProcessingInstruction => |a| try dom.createProcInst(a.node_id, a.target, a.content),
+            .CreateProcessingInstruction => |a| try dom.createProcInst(a.node_id, a.content),
             .CreateComment => |a| try dom.createComment(a.node_id, a.content),
             .AppendChild => |a| try dom.appendChild(a.parent, a.child),
             .PrependChild => |a| try dom.prependChild(a.parent, a.child),
