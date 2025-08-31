@@ -134,22 +134,19 @@ const NamedNodeMap = struct {
 const testing = std.testing;
 
 test "nodelist" {
-    var dom1 = DOM.init(testing.allocator);
-    defer dom1.deinit();
-
-    var builder = try Builder.fromDom(&dom1, testing.allocator);
+    var builder = try Builder.init(testing.allocator);
     defer builder.deinit();
 
     const doc = try builder.createDocument();
-    const elem = try builder.createElement("div");
-    const text1 = try builder.createText("Hello");
-    const text2 = try builder.createText("World");
+    const elem = try builder.createElement(0);
+    const text1 = try builder.createText(1);
+    const text2 = try builder.createText(2);
 
     try builder.appendChild(doc, elem);
     try builder.appendChild(elem, text1);
     try builder.appendChild(elem, text2);
 
-    var dom2 = try builder.buildDom();
+    var dom2 = try builder.build();
     defer dom2.deinit();
 
     try testing.expect(dom2.firstChild(elem) == text1);
@@ -163,9 +160,9 @@ test "namednodemap" {
     defer builder.deinit();
 
     _ = try builder.createDocument();
-    const elem = try builder.createElement("div");
-    try builder.setAttribute(elem, "class", "container");
-    try builder.setAttribute(elem, "id", "main");
+    const elem = try builder.createElement(0);
+    try builder.setAttribute(elem, 1, 2);
+    try builder.setAttribute(elem, 3, 4);
 
     var dom2 = try builder.build();
     defer dom2.deinit();
@@ -173,14 +170,14 @@ test "namednodemap" {
     const first_attr = dom2.firstAttr(elem);
     try testing.expect(first_attr != None);
     try testing.expect(dom2.nodeType(first_attr) == .attribute);
-    try testing.expectEqualStrings("class", dom2.strings.getString(dom2.attrName(first_attr)));
-    try testing.expectEqualStrings("container", dom2.strings.getString(dom2.attrValue(first_attr)));
+    try testing.expect(1 == dom2.attrName(first_attr));
+    try testing.expect(2 == dom2.attrValue(first_attr));
 
     const second_attr = dom2.nextSibling(first_attr);
     try testing.expect(second_attr != None);
     try testing.expect(dom2.nodeType(second_attr) == .attribute);
-    try testing.expectEqualStrings("id", dom2.strings.getString(dom2.attrName(second_attr)));
-    try testing.expectEqualStrings("main", dom2.strings.getString(dom2.attrValue(second_attr)));
+    try testing.expect(3 == dom2.attrName(second_attr));
+    try testing.expect(4 == dom2.attrValue(second_attr));
 
     try testing.expect(dom2.nextSibling(second_attr) == None);
 }
