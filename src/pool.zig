@@ -6,7 +6,7 @@ const testing = std.testing;
 pub const None: u32 = std.math.maxInt(u32);
 pub const Root: u32 = 0;
 
-const StringPool = struct {
+pub const StringPool = struct {
     strings: ArrayList([]const u8),
     map: std.HashMap([]const u8, u32, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
 
