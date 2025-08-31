@@ -1,5 +1,5 @@
 const std = @import("std");
-const dom = @import("cow.zig");
+const dom = @import("dom.zig");
 const DOM = dom.DOM;
 const None = dom.None;
 const NodeType = dom.NodeType;
